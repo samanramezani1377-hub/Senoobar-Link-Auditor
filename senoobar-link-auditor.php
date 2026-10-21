@@ -206,7 +206,8 @@ final class Senoobar_Link_Auditor {
                     <button class="button">اعمال فیلتر</button>
                     <a class="button" href="<?php echo esc_url(wp_nonce_url(admin_url('admin-post.php?action=sla_export_csv&scan_id=' . (int) $current->id . '&link_type=' . rawurlencode($type) . '&source_type=' . rawurlencode($source_type) . '&s=' . rawurlencode($search)), 'sla_export_csv')); ?>">خروجی CSV</a>
                 </form>
-                <table class="widefat striped sla-table">
+                <h2>فهرست لینک‌ها <button type="button" class="button sla-copy-report" data-copy="sla-link-inventory">کپی این گزارش</button></h2>
+                <table class="widefat striped sla-table" id="sla-link-inventory">
                     <thead><tr><th>محتوای مبدأ</th><th>نوع</th><th>متن لنگر</th><th>آدرس مقصد</th><th>دسته</th></tr></thead>
                     <tbody>
                     <?php if (!$rows): ?>
