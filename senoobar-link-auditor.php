@@ -231,9 +231,16 @@ final class Senoobar_Link_Auditor {
         $this->verify_ajax_request();
         global $wpdb;
 
+        // Reclaim abandoned scans only when an administrator explicitly starts a new scan.
+        $wpdb->query($wpdb->prepare(
+            "UPDATE {$this->scans_table} SET status = %s WHERE status = %s AND started_at < DATE_SUB(%s, INTERVAL 2 HOUR)",
+            'abandoned',
+            'running',
+            current_time('mysql')
+        ));
         $existing = $wpdb->get_var($wpdb->prepare("SELECT id FROM {$this->scans_table} WHERE status = %s LIMIT 1", 'running'));
         if ($existing) {
-            wp_send_json_error(['message' => 'یک بررسی دیگر هنوز فعال است. آن را لغو کنید یا همان صفحهٔ فعال را ادامه دهید.'], 409);
+            wp_send_json_error(['message' => 'یک بررسی دیگر هنوز فعال است. آن را لغو کنید یا کمی بعد دوباره تلاش کنید.'], 409);
         }
 
         $token = bin2hex(random_bytes(32));
