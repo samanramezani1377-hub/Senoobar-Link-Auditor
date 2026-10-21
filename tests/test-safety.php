@@ -26,4 +26,4 @@ sla_safety_assert(str_contains($main, 'ENGINE=InnoDB'), 'snapshot tables support
 sla_safety_assert(str_contains($main, ", '\"', '')"), 'CSV export specifies an empty escape parameter for PHP 8.4');
 sla_safety_assert(str_contains($js, "await request('sla_scan_batch'"), 'scan batches are user-session driven');
 sla_safety_assert(!preg_match('/setInterval\\s*\\(|setTimeout\\s*\\(/', $js), 'no background polling or timer is used');
-echo "Safety checks passed (15 assertions).\n";
+echo "Safety checks passed (21 assertions).\n";
