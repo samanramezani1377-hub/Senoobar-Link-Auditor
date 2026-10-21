@@ -11,13 +11,10 @@
   const errorBox = document.getElementById('sla-error');
   let activeScan = null;
   let busy = false;
+  let cancelRequested = false;
 
   async function request(action, payload = {}) {
-    const body = new URLSearchParams({
-      action,
-      nonce: SLAConfig.nonce,
-      ...payload
-    });
+    const body = new URLSearchParams({ action, nonce: SLAConfig.nonce, ...payload });
     const response = await fetch(SLAConfig.ajaxUrl, {
       method: 'POST',
       credentials: 'same-origin',
@@ -41,32 +38,44 @@
     errorBox.querySelector('p').textContent = message;
   }
 
-  async function runNextBatch() {
-    if (!activeScan || !busy) return;
+  function finish(message) {
+    busy = false;
+    activeScan = null;
+    cancelRequested = false;
+    cancelButton.hidden = true;
+    cancelButton.disabled = false;
+    startButton.disabled = false;
+    status.textContent = message;
+  }
+
+  async function runBatches() {
     try {
-      const result = await request('sla_scan_batch', {
-        scanId: String(activeScan.scanId),
-        token: activeScan.token
-      });
-      setProgress(result.processed, result.total, result.percent);
-      if (result.done) {
-        busy = false;
-        activeScan = null;
-        cancelButton.hidden = true;
-        startButton.disabled = false;
-        status.textContent = SLAConfig.strings.done;
-        window.location.reload();
-        return;
+      while (activeScan && busy) {
+        if (cancelRequested) {
+          await request('sla_cancel_scan', {
+            scanId: String(activeScan.scanId),
+            token: activeScan.token
+          });
+          finish(SLAConfig.strings.cancelled);
+          return;
+        }
+
+        // Each bounded request completes before the next request is sent.
+        const result = await request('sla_scan_batch', {
+          scanId: String(activeScan.scanId),
+          token: activeScan.token
+        });
+        setProgress(result.processed, result.total, result.percent);
+
+        if (result.done) {
+          finish(SLAConfig.strings.done);
+          window.location.reload();
+          return;
+        }
       }
-      // The next bounded request is issued only after the prior response.
-      await runNextBatch();
     } catch (error) {
-      busy = false;
-      activeScan = null;
-      cancelButton.hidden = true;
-      startButton.disabled = false;
-      status.textContent = SLAConfig.strings.failed;
-      showError(error.message || SLAConfig.strings.failed);
+      finish(cancelRequested ? SLAConfig.strings.cancelled : SLAConfig.strings.failed);
+      if (!cancelRequested) showError(error.message || SLAConfig.strings.failed);
     }
   }
 
@@ -82,35 +91,21 @@
       const result = await request('sla_start_scan');
       activeScan = { scanId: result.scanId, token: result.token };
       busy = true;
+      cancelRequested = false;
       cancelButton.hidden = false;
       status.textContent = SLAConfig.strings.working;
       setProgress(result.processed, result.total, 0);
-      await runNextBatch();
+      await runBatches();
     } catch (error) {
-      busy = false;
-      startButton.disabled = false;
-      status.textContent = SLAConfig.strings.failed;
+      finish(SLAConfig.strings.failed);
       showError(error.message || SLAConfig.strings.failed);
     }
   });
 
-  cancelButton.addEventListener('click', async () => {
+  cancelButton.addEventListener('click', () => {
     if (!activeScan || !busy) return;
+    cancelRequested = true;
     cancelButton.disabled = true;
-    try {
-      await request('sla_cancel_scan', {
-        scanId: String(activeScan.scanId),
-        token: activeScan.token
-      });
-      busy = false;
-      activeScan = null;
-      status.textContent = SLAConfig.strings.cancelled;
-    } catch (error) {
-      showError(error.message || SLAConfig.strings.failed);
-    } finally {
-      cancelButton.disabled = false;
-      cancelButton.hidden = true;
-      startButton.disabled = false;
-    }
+    status.textContent = 'در حال لغو بررسی پس از پایان درخواست جاری…';
   });
 })();
