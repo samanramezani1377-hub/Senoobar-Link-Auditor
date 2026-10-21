@@ -45,7 +45,6 @@ bash scripts/build-plugin-zip.sh
 
 GitHub Actions runs syntax, behavior, and safety checks before packaging. ZIP artifacts are generated only by the package job after checks pass.
 
-
 ## Native WordPress agent abilities
 
 When the WordPress Abilities API is installed and available, the plugin registers two administrator-only abilities that a connected WordPress agent can discover and call directly:
@@ -53,18 +52,24 @@ When the WordPress Abilities API is installed and available, the plugin register
 - `senoobar-link-auditor/get-report` — read the latest successful report, counts, paginated link rows, and items without internal links.
 - `senoobar-link-auditor/scan-links` — `action=start` creates a staged scan; `action=continue` with `scan_id` processes one bounded batch; `action=status` reads scan status. Continue until the status is `complete`, then read the report.
 
-Both abilities check the current user's `manage_options` capability. The scan ability never edits content. If the Abilities API is unavailable, the REST API below remains available.
+Both abilities check the current user's `manage_options` capability. The scan ability never edits content. If the Abilities API is unavailable or undiscoverable by the connected agent, use the dedicated REST API below.
 
-## WordPress agent / REST API
+## WordPress agent / REST API bridge
 
-The plugin exposes a small REST API for an authorized WordPress agent to read the latest completed link report and explicitly start/continue a scan. All routes require an authenticated user with the WordPress \`manage_options\` capability (administrator). Use HTTPS and WordPress Application Password authentication for external agent connections; never put credentials in prompts, source code, or URLs.
+The plugin registers a dedicated REST API for an authorized WordPress agent. Base path: `/wp-json/sla/v1`.
 
-Base path: \`/wp-json/sla/v1\`
+All routes require an authenticated WordPress administrator with the `manage_options` capability. Use HTTPS and WordPress Application Password authentication for external agent connections; never put credentials in prompts, source code, or URLs.
 
-- \`GET /status\` — plugin version, current successful report counts, and any running scan.
-- \`GET /report?page=1&per_page=50&link_type=all&source_type=all&search=\` — summary counts and a page of link rows. \`per_page\` is capped at 100. Filters: \`link_type=internal|external|all\`; \`source_type=post|page|product|all\`.
-- \`POST /scans\` — explicitly starts a new staged scan and returns its ID. It does not change any content.
-- \`POST /scans/{id}/continue\` — processes one bounded batch of up to 20 published posts/pages/products. Call repeatedly until the response status is \`complete\`.
-- \`GET /scans/{id}\` — reads progress/status for a scan.
+| Method | Route | Purpose |
+| --- | --- | --- |
+| GET | `/status` | Plugin version, current successful report counts, and any running scan |
+| GET | `/report?page=1&per_page=50&link_type=all&source_type=all` | Summary counts and one page of link rows; `per_page` is capped at 100 |
+| POST | `/scans` | Explicitly starts a new staged scan and returns its ID |
+| POST | `/scans/{id}/continue` | Processes one bounded batch of up to 20 published posts/pages/products |
+| GET | `/scans/{id}` | Reads scan progress/status |
 
-A new scan becomes the current report only after successful completion. Failed scans preserve the previous successful report. The REST API does not crawl rendered pages or request link destinations, and never edits content. Requests must be authenticated; these routes are not public.
+Report filters: `link_type=internal|external|all`; `source_type=post|page|product|all`; `search` matches source title, anchor text, or URL. A new scan becomes the current report only after successful completion. Failed scans preserve the previous successful report. The API does not crawl rendered pages or request link destinations, never edits content, and runs no persistent background worker. Scan start/continue requests must only be sent after an explicit user request.
+
+**MCP connector configuration matters:** the connector's `rest-list-routes` tool may show only routes/methods explicitly granted to that connection, not every route WordPress has registered. Therefore, if `sla/v1` is missing from that tool, grant the required route/method access in the MCP connector configuration; do not make the endpoints public or remove the `manage_options` check. See [docs/agent-rest-api.md](docs/agent-rest-api.md) for authentication, the safe scan sequence, and troubleshooting.
+
+The REST API is implemented in the plugin source on the `feature/link-auditor-plugin` branch. It must be deployed to the WordPress site before the live site can serve these routes.
