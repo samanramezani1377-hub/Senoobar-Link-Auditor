@@ -1,6 +1,23 @@
 <?php
 declare(strict_types=1);
 
+if (!function_exists('wp_parse_url')) {
+    function wp_parse_url(string $url): array|false {
+        return parse_url($url);
+    }
+}
+if (!function_exists('esc_url_raw')) {
+    function esc_url_raw(string $url, array $protocols = ['http', 'https']): string {
+        $scheme = parse_url($url, PHP_URL_SCHEME);
+        return $scheme && !in_array(strtolower((string) $scheme), $protocols, true) ? '' : $url;
+    }
+}
+if (!function_exists('mb_substr')) {
+    function mb_substr(string $string, int $start, ?int $length = null, ?string $encoding = null): string {
+        return substr($string, $start, $length);
+    }
+}
+
 require_once __DIR__ . '/../includes/class-sla-parser.php';
 
 function sla_assert(bool $condition, string $message): void {
