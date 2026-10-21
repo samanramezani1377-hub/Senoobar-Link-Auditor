@@ -369,6 +369,16 @@ final class Senoobar_Link_Auditor {
                         $wpdb->delete($this->scans_table, ['id' => $old_id, 'status' => 'complete'], ['%d', '%s']);
                     }
                 }
+                // Clean failed/abandoned staging rows so repeated failed attempts do not grow the tables.
+                $stale_ids = $wpdb->get_col($wpdb->prepare(
+                    "SELECT id FROM {$this->scans_table} WHERE id <> %d AND status NOT IN (%s,%s)",
+                    $scan_id, 'complete', 'running'
+                ));
+                foreach (array_map('intval', $stale_ids ?: []) as $stale_id) {
+                    $wpdb->delete($this->links_table, ['scan_id' => $stale_id], ['%d']);
+                    $wpdb->delete($this->sources_table, ['scan_id' => $stale_id], ['%d']);
+                    $wpdb->delete($this->scans_table, ['id' => $stale_id], ['%d']);
+                }
                 $wpdb->query('COMMIT');
                 wp_send_json_success(['done' => true, 'processed' => (int) $scan->processed_posts, 'total' => (int) $scan->total_posts, 'percent' => 100]);
             }
