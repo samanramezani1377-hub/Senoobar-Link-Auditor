@@ -46,6 +46,15 @@ bash scripts/build-plugin-zip.sh
 GitHub Actions runs syntax, behavior, and safety checks before packaging. ZIP artifacts are generated only by the package job after checks pass.
 
 
+## Native WordPress agent abilities
+
+When the WordPress Abilities API is installed and available, the plugin registers two administrator-only abilities that a connected WordPress agent can discover and call directly:
+
+- `senoobar-link-auditor/get-report` — read the latest successful report, counts, paginated link rows, and items without internal links.
+- `senoobar-link-auditor/scan-links` — `action=start` creates a staged scan; `action=continue` with `scan_id` processes one bounded batch; `action=status` reads scan status. Continue until the status is `complete`, then read the report.
+
+Both abilities check the current user's `manage_options` capability. The scan ability never edits content. If the Abilities API is unavailable, the REST API below remains available.
+
 ## WordPress agent / REST API
 
 The plugin exposes a small REST API for an authorized WordPress agent to read the latest completed link report and explicitly start/continue a scan. All routes require an authenticated user with the WordPress \`manage_options\` capability (administrator). Use HTTPS and WordPress Application Password authentication for external agent connections; never put credentials in prompts, source code, or URLs.
