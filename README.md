@@ -44,3 +44,18 @@ bash scripts/build-plugin-zip.sh
 ~~~
 
 GitHub Actions runs syntax, behavior, and safety checks before packaging. ZIP artifacts are generated only by the package job after checks pass.
+
+
+## WordPress agent / REST API
+
+The plugin exposes a small REST API for an authorized WordPress agent to read the latest completed link report and explicitly start/continue a scan. All routes require an authenticated user with the WordPress \`manage_options\` capability (administrator). Use HTTPS and WordPress Application Password authentication for external agent connections; never put credentials in prompts, source code, or URLs.
+
+Base path: \`/wp-json/sla/v1\`
+
+- \`GET /status\` — plugin version, current successful report counts, and any running scan.
+- \`GET /report?page=1&per_page=50&link_type=all&source_type=all&search=\` — summary counts and a page of link rows. \`per_page\` is capped at 100. Filters: \`link_type=internal|external|all\`; \`source_type=post|page|product|all\`.
+- \`POST /scans\` — explicitly starts a new staged scan and returns its ID. It does not change any content.
+- \`POST /scans/{id}/continue\` — processes one bounded batch of up to 20 published posts/pages/products. Call repeatedly until the response status is \`complete\`.
+- \`GET /scans/{id}\` — reads progress/status for a scan.
+
+A new scan becomes the current report only after successful completion. Failed scans preserve the previous successful report. The REST API does not crawl rendered pages or request link destinations, and never edits content. Requests must be authenticated; these routes are not public.
