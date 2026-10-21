@@ -1,37 +1,43 @@
 # Senoobar Link Auditor
 
-A standalone WordPress plugin that inventories links found in saved content for published posts, pages, and WooCommerce products.
+A standalone, admin-only WordPress plugin for practical internal-link analysis.
 
 ## Features
 
-- Internal and external link inventory with source content, anchor text, URL, and content type.
+- Inventory internal and external links found in saved content for published posts, pages, and WooCommerce products.
+- Count internal inbound links per destination page and list source pages linking to it.
+- List pages with zero inbound internal links, so orphaned content can be found.
+- Manually check HTTP/HTTPS link destinations in small batches; broken HTTP responses are separated from connection errors or unknown results.
+- Copy each report table independently with its own button, including broken links, pages with no inbound links, and inbound-link counts.
 - Search, filters, pagination, summary counts, and CSV export.
-- Keeps the last successful snapshot visible while a manual rescan runs.
-- A scan starts only when an administrator clicks the manual rescan button.
-- Reads saved post content only; it does not crawl rendered pages or fetch destination URLs.
-- No frontend hooks/assets/queries for scanning, no cron jobs, persistent workers, timers, or idle polling.
-- Does not edit content, create posts/pages, or alter SEO plugin settings.
+- Keeps the last successful content scan visible while a manual rescan runs.
+- Scans only after an administrator clicks the rescan button; broken-link checks also require a separate explicit click.
+- No frontend assets/queries for scanning, no cron jobs, persistent workers, timers, or idle polling.
+- Does not edit content, create posts/pages, or alter SEO settings.
+- No agent abilities or custom agent REST endpoints are registered.
 
 ## Installation
 
-1. Download the senoobar-link-auditor.zip artifact from a successful GitHub Actions run or release.
+1. Download the ZIP artifact from a successful GitHub Actions run or release.
 2. In WordPress, open Plugins → Add New Plugin → Upload Plugin.
 3. Upload the ZIP, install, and activate.
 4. Open Tools → Link Auditor and click the manual rescan button.
 
-## What is scanned
+## Scope and accuracy
 
-Only published WordPress post, page, and product records and their stored post_content field. Header/footer markup, navigation menus, widgets, scripts, and rendered frontend output are outside scope. A link is classified as internal when its hostname exactly matches the site's hostname; subdomains are treated as distinct hosts.
+The content scan examines stored `post_content` for published posts, pages, and products. Navigation menus, headers/footers, widgets, scripts, and rendered frontend output are outside scope. A link is internal when its hostname exactly matches the site's hostname; subdomains are treated as separate hosts. Inbound counts depend on WordPress resolving the saved URL to a published post/page/product. Rescan after upgrading to populate the new inbound-link fields for the existing report.
+
+The broken-link checker is a separate, user-triggered operation. It checks HTTP/HTTPS URLs in small batches using WordPress safe HTTP requests with short timeouts and bounded redirects. HTTP 4xx/5xx responses are reported as broken; connection errors and unclassifiable responses are not treated as confirmed broken links. Some hosts block HEAD requests or respond differently to bots, so verify important URLs manually before making content changes.
 
 ## Performance and data behavior
 
-Normal frontend requests do not run scanner logic or load the plugin's assets. Opening the admin screen only reads the most recent completed snapshot. When explicitly started, the browser sends one bounded batch request at a time; if the screen is closed, processing stops. There is no automatic resume and no persistent background process.
+Normal frontend requests do not run scanner logic or load plugin assets. Opening the admin screen reads the last completed snapshot. When explicitly started, the browser sends one bounded batch at a time; closing the screen stops the work. There is no automatic resume or persistent background process.
 
-New results are written to a staging scan. Only a successful completion replaces the current snapshot. A failed or cancelled scan leaves the previous completed snapshot available. Scanning inspects stored content and does not request external URLs, so it does not verify whether a destination currently responds.
+New content-scan results are staged. Only successful completion replaces the current snapshot; failed or cancelled scans preserve the previous successful report. Broken-link checks update status fields on the current report and do not modify post content.
 
 ## Security and data retention
 
-Scan and export actions require manage_options and nonce validation. Database operations use prepared queries where input is involved; output is escaped and CSV formula-leading cells are prefixed. Data is stored in plugin-owned database tables. Successful rescans remove older snapshots. Uninstall removes plugin tables unless a site administrator explicitly defines SLA_KEEP_DATA_ON_UNINSTALL as true in wp-config.php before uninstalling.
+Scan/export actions require `manage_options` and nonce validation. Destination checks use WordPress safe HTTP functions to reject unsafe destinations. Database queries use prepared statements where user-controlled input is involved, output is escaped, and CSV formula-leading values are neutralized. Uninstall removes plugin tables unless `SLA_KEEP_DATA_ON_UNINSTALL` is set to true in `wp-config.php`.
 
 ## Development checks
 
@@ -43,33 +49,4 @@ node --check assets/js/admin.js
 bash scripts/build-plugin-zip.sh
 ~~~
 
-GitHub Actions runs syntax, behavior, and safety checks before packaging. ZIP artifacts are generated only by the package job after checks pass.
-
-## Native WordPress agent abilities
-
-When the WordPress Abilities API is installed and available, the plugin registers two administrator-only abilities that a connected WordPress agent can discover and call directly:
-
-- `senoobar-link-auditor/get-report` — read the latest successful report, counts, paginated link rows, and items without internal links.
-- `senoobar-link-auditor/scan-links` — `action=start` creates a staged scan; `action=continue` with `scan_id` processes one bounded batch; `action=status` reads scan status. Continue until the status is `complete`, then read the report.
-
-Both abilities check the current user's `manage_options` capability. The scan ability never edits content. If the Abilities API is unavailable or undiscoverable by the connected agent, use the dedicated REST API below.
-
-## WordPress agent / REST API bridge
-
-The plugin registers a dedicated REST API for an authorized WordPress agent. Base path: `/wp-json/sla/v1`.
-
-All routes require an authenticated WordPress administrator with the `manage_options` capability. Use HTTPS and WordPress Application Password authentication for external agent connections; never put credentials in prompts, source code, or URLs.
-
-| Method | Route | Purpose |
-| --- | --- | --- |
-| GET | `/status` | Plugin version, current successful report counts, and any running scan |
-| GET | `/report?page=1&per_page=50&link_type=all&source_type=all` | Summary counts and one page of link rows; `per_page` is capped at 100 |
-| POST | `/scans` | Explicitly starts a new staged scan and returns its ID |
-| POST | `/scans/{id}/continue` | Processes one bounded batch of up to 20 published posts/pages/products |
-| GET | `/scans/{id}` | Reads scan progress/status |
-
-Report filters: `link_type=internal|external|all`; `source_type=post|page|product|all`; `search` matches source title, anchor text, or URL. A new scan becomes the current report only after successful completion. Failed scans preserve the previous successful report. The API does not crawl rendered pages or request link destinations, never edits content, and runs no persistent background worker. Scan start/continue requests must only be sent after an explicit user request.
-
-**MCP connector configuration matters:** the connector's `rest-list-routes` tool may show only routes/methods explicitly granted to that connection, not every route WordPress has registered. Therefore, if `sla/v1` is missing from that tool, grant the required route/method access in the MCP connector configuration; do not make the endpoints public or remove the `manage_options` check. See [docs/agent-rest-api.md](docs/agent-rest-api.md) for authentication, the safe scan sequence, and troubleshooting.
-
-The REST API is implemented in the plugin source on the `feature/link-auditor-plugin` branch. It must be deployed to the WordPress site before the live site can serve these routes.
+GitHub Actions runs syntax, behavior, and safety checks before packaging. ZIP artifacts are generated only after quality checks pass.
