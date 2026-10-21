@@ -302,7 +302,7 @@ final class Senoobar_Link_Auditor {
             foreach ($posts as $post) {
                 $last_id = (int) $post->ID;
                 $occurrence = 0;
-                $links = SLA_Parser::extract_links((string) $post->post_content, home_url('/'));
+                $links = SLA_Parser::extract_links((string) $post->post_content, home_url('/'), get_permalink((int) $post->ID) ?: home_url('/'));
                 $internal_count = count(array_filter($links, static fn(array $link): bool => $link['type'] === 'internal'));
                 $source_saved = $wpdb->insert($this->sources_table, [
                     'scan_id' => $scan_id,
