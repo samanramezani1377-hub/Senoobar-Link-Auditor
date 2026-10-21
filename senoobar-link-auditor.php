@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Senoobar Link Auditor
  * Description: گزارش لینک‌های ذخیره‌شده در نوشته‌ها، برگه‌ها و محصولات ووکامرس؛ بدون تغییر محتوا.
- * Version: 0.1.0
+ * Version: 0.2.0
  * Requires at least: 6.2
  * Requires PHP: 8.0
  * Author: Senoobar
@@ -14,7 +14,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('SLA_VERSION', '0.1.0');
+define('SLA_VERSION', '0.2.0');
 define('SLA_FILE', __FILE__);
 define('SLA_DIR', plugin_dir_path(__FILE__));
 define('SLA_URL', plugin_dir_url(__FILE__));
@@ -34,9 +34,8 @@ final class Senoobar_Link_Auditor {
 
         register_activation_hook(SLA_FILE, [$this, 'activate']);
         add_action('admin_menu', [$this, 'admin_menu']);
-        add_action('rest_api_init', [$this, 'register_rest_routes']);
-        add_action('wp_abilities_api_categories_init', [$this, 'register_ability_categories']);
-        add_action('wp_abilities_api_init', [$this, 'register_agent_abilities']);
+        add_action('admin_init', [$this, 'maybe_upgrade_schema']);
+        add_action('wp_ajax_sla_check_broken_batch', [$this, 'ajax_check_broken_batch']);
         add_action('admin_enqueue_scripts', [$this, 'enqueue_admin_assets']);
         add_action('wp_ajax_sla_start_scan', [$this, 'ajax_start_scan']);
         add_action('wp_ajax_sla_scan_batch', [$this, 'ajax_scan_batch']);
@@ -74,6 +73,11 @@ final class Senoobar_Link_Auditor {
             source_post_id bigint(20) unsigned NOT NULL,
             source_title text NOT NULL,
             source_type varchar(20) NOT NULL,
+            target_post_id bigint(20) unsigned NOT NULL DEFAULT 0,
+            check_status varchar(20) NOT NULL DEFAULT 'unchecked',
+            check_code smallint(5) unsigned NOT NULL DEFAULT 0,
+            check_message varchar(255) NOT NULL DEFAULT '',
+            checked_at datetime NULL,
             url text NOT NULL,
             anchor_text text NOT NULL,
             link_type varchar(10) NOT NULL,
@@ -82,8 +86,12 @@ final class Senoobar_Link_Auditor {
             UNIQUE KEY occurrence (scan_id,source_post_id,occurrence_no),
             KEY scan_type (scan_id,link_type),
             KEY source_post (source_post_id),
-            KEY scan_source_type (scan_id,source_type)
+            KEY scan_source_type (scan_id,source_type),
+            KEY scan_target (scan_id,target_post_id),
+            KEY scan_check_status (scan_id,check_status)
         ) ENGINE=InnoDB {$charset};");
+
+        update_option('sla_db_version', SLA_VERSION, false);
 
         dbDelta("CREATE TABLE {$sources} (
             scan_id bigint(20) unsigned NOT NULL,
@@ -98,424 +106,8 @@ final class Senoobar_Link_Auditor {
         ) ENGINE=InnoDB {$charset};");
     }
 
-    /**
-     * Read-only/report and explicitly-triggered scan endpoints for authorized agents.
-     * All routes require an authenticated WordPress administrator (manage_options).
-     */
-    public function register_rest_routes(): void {
-        register_rest_route('sla/v1', '/status', [
-            'methods' => WP_REST_Server::READABLE,
-            'callback' => [$this, 'rest_status'],
-            'permission_callback' => [$this, 'rest_admin_permission'],
-        ]);
-        register_rest_route('sla/v1', '/report', [
-            'methods' => WP_REST_Server::READABLE,
-            'callback' => [$this, 'rest_report'],
-            'permission_callback' => [$this, 'rest_admin_permission'],
-            'args' => [
-                'page' => ['default' => 1, 'sanitize_callback' => 'absint'],
-                'per_page' => ['default' => 50, 'sanitize_callback' => 'absint'],
-                'link_type' => ['default' => 'all', 'sanitize_callback' => 'sanitize_key'],
-                'source_type' => ['default' => 'all', 'sanitize_callback' => 'sanitize_key'],
-                'search' => ['default' => '', 'sanitize_callback' => 'sanitize_text_field'],
-            ],
-        ]);
-        register_rest_route('sla/v1', '/scans', [
-            'methods' => WP_REST_Server::CREATABLE,
-            'callback' => [$this, 'rest_start_scan'],
-            'permission_callback' => [$this, 'rest_admin_permission'],
-        ]);
-        register_rest_route('sla/v1', '/scans/(?P<id>\d+)/continue', [
-            'methods' => WP_REST_Server::CREATABLE,
-            'callback' => [$this, 'rest_continue_scan'],
-            'permission_callback' => [$this, 'rest_admin_permission'],
-            'args' => ['id' => ['required' => true, 'sanitize_callback' => 'absint']],
-        ]);
-        register_rest_route('sla/v1', '/scans/(?P<id>\d+)', [
-            'methods' => WP_REST_Server::READABLE,
-            'callback' => [$this, 'rest_scan_status'],
-            'permission_callback' => [$this, 'rest_admin_permission'],
-            'args' => ['id' => ['required' => true, 'sanitize_callback' => 'absint']],
-        ]);
-    }
-
-    /** Register a dedicated category before registering this plugin's abilities. */
-    public function register_ability_categories(): void {
-        if (!function_exists('wp_register_ability_category')) {
-            return;
-        }
-
-        // Avoid duplicate-registration notices if another component already registered it.
-        if (function_exists('wp_get_ability_category') && wp_get_ability_category('senoobar-link-auditor')) {
-            return;
-        }
-
-        wp_register_ability_category('senoobar-link-auditor', [
-            'label' => 'ابزارهای سئو صنوبر',
-            'description' => 'قابلیت‌های گزارش‌گیری و اسکن دستی لینک‌های سایت صنوبر.',
-        ]);
-    }
-
-    /**
-     * Register native WordPress Abilities API tools when that API is available.
-     * This lets connected WordPress agents discover and invoke the scanner directly.
-     */
-    public function register_agent_abilities(): void {
-        if (!function_exists('wp_register_ability')) {
-            return;
-        }
-
-        wp_register_ability('senoobar-link-auditor/get-report', [
-            'label' => 'دریافت گزارش لینک‌های صنوبر',
-            'description' => 'خواندن گزارش آخرین اسکن موفق لینک‌های داخلی و خارجی، شامل آمار، لنگرهای خالی و محتواهای بدون لینک داخلی. فقط خواندنی است.',
-            'category' => 'senoobar-link-auditor',
-            'input_schema' => [
-                'type' => 'object',
-                'properties' => [
-                    'page' => ['type' => 'integer', 'minimum' => 1, 'default' => 1],
-                    'per_page' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 100, 'default' => 50],
-                    'link_type' => ['type' => 'string', 'enum' => ['all', 'internal', 'external'], 'default' => 'all'],
-                    'source_type' => ['type' => 'string', 'enum' => ['all', 'post', 'page', 'product'], 'default' => 'all'],
-                    'search' => ['type' => 'string', 'default' => ''],
-                ],
-                'additionalProperties' => false,
-            ],
-            'output_schema' => ['type' => 'object', 'properties' => ['available' => ['type' => 'boolean'], 'links' => ['type' => 'array']], 'additionalProperties' => true],
-            'execute_callback' => [$this, 'ability_get_report'],
-            'permission_callback' => [$this, 'rest_admin_permission'],
-            'meta' => [
-                // Explicitly opt into REST and MCP discovery; execution remains admin-only.
-                'public' => false,
-                'show_in_rest' => true,
-                'mcp' => ['public' => true],
-                'annotations' => ['readonly' => true, 'destructive' => false, 'idempotent' => true],
-            ],
-        ]);
-
-        wp_register_ability('senoobar-link-auditor/scan-links', [
-            'label' => 'اسکن دستی لینک‌های صنوبر',
-            'description' => 'به‌صورت صریح اسکن را شروع می‌کند یا یک دسته از اسکن فعال را ادامه می‌دهد. برای شروع action=start و برای ادامه action=continue همراه scan_id را بفرستید. هیچ محتوایی تغییر نمی‌کند.',
-            'category' => 'senoobar-link-auditor',
-            'input_schema' => [
-                'type' => 'object',
-                'properties' => [
-                    'action' => ['type' => 'string', 'enum' => ['start', 'continue', 'status'], 'default' => 'status'],
-                    'scan_id' => ['type' => 'integer', 'minimum' => 1],
-                ],
-                'required' => ['action'],
-                'additionalProperties' => false,
-            ],
-            'output_schema' => ['type' => 'object', 'additionalProperties' => true],
-            'execute_callback' => [$this, 'ability_scan_links'],
-            'permission_callback' => [$this, 'rest_admin_permission'],
-            'meta' => [
-                // Discovery is allowed, but only users with manage_options may execute it.
-                'public' => false,
-                'show_in_rest' => true,
-                'mcp' => ['public' => true],
-                'annotations' => ['readonly' => false, 'destructive' => false, 'idempotent' => false],
-            ],
-        ]);
-    }
-
-    public function ability_get_report(array $input = []): array|WP_Error {
-        $request = new WP_REST_Request('GET', '/sla/v1/report');
-        foreach (['page', 'per_page', 'link_type', 'source_type', 'search'] as $key) {
-            if (array_key_exists($key, $input)) {
-                $request->set_param($key, $input[$key]);
-            }
-        }
-        $response = $this->rest_report($request);
-        return $this->ability_response_data($response);
-    }
-
-    public function ability_scan_links(array $input = []): array|WP_Error {
-        $action = sanitize_key((string) ($input['action'] ?? 'status'));
-        if ($action === 'start') {
-            $response = $this->rest_start_scan(new WP_REST_Request('POST', '/sla/v1/scans'));
-        } elseif ($action === 'continue') {
-            $scan_id = absint($input['scan_id'] ?? 0);
-            if ($scan_id < 1) {
-                return new WP_Error('sla_missing_scan_id', 'برای ادامهٔ اسکن، scan_id الزامی است.', ['status' => 400]);
-            }
-            $request = new WP_REST_Request('POST', '/sla/v1/scans/' . $scan_id . '/continue');
-            $request->set_param('id', $scan_id);
-            $response = $this->rest_continue_scan($request);
-        } else {
-            $scan_id = absint($input['scan_id'] ?? 0);
-            if ($scan_id > 0) {
-                $request = new WP_REST_Request('GET', '/sla/v1/scans/' . $scan_id);
-                $request->set_param('id', $scan_id);
-                $response = $this->rest_scan_status($request);
-            } else {
-                $response = $this->rest_status(new WP_REST_Request('GET', '/sla/v1/status'));
-            }
-        }
-        return $this->ability_response_data($response);
-    }
-
-    private function ability_response_data(WP_REST_Response $response): array|WP_Error {
-        $data = $response->get_data();
-        if ($response->get_status() >= 400) {
-            $code = is_array($data) && isset($data['code']) ? sanitize_key((string) $data['code']) : 'sla_agent_request_failed';
-            $message = is_array($data) && isset($data['message']) ? (string) $data['message'] : 'درخواست انجام نشد.';
-            return new WP_Error($code, $message, ['status' => $response->get_status()]);
-        }
-        return is_array($data) ? $data : ['result' => $data];
-    }
-
-    public function rest_admin_permission(): bool {
-        return current_user_can('manage_options');
-    }
-
-    public function rest_status(WP_REST_Request $request): WP_REST_Response {
-        global $wpdb;
-        $current = $this->current_scan();
-        $running = $wpdb->get_row($wpdb->prepare(
-            "SELECT id, status, started_at, total_posts, processed_posts FROM {$this->scans_table} WHERE status = %s ORDER BY id DESC LIMIT 1",
-            'running'
-        ));
-        return rest_ensure_response([
-            'plugin' => 'Senoobar Link Auditor',
-            'version' => SLA_VERSION,
-            'scan_available' => true,
-            'current_report' => $current ? [
-                'scan_id' => (int) $current->id,
-                'completed_at' => $current->completed_at,
-                'counts' => $this->report_counts((int) $current->id),
-            ] : null,
-            'running_scan' => $running ? [
-                'scan_id' => (int) $running->id,
-                'status' => $running->status,
-                'started_at' => $running->started_at,
-                'total_posts' => (int) $running->total_posts,
-                'processed_posts' => (int) $running->processed_posts,
-            ] : null,
-            'scan_instructions' => [
-                'start' => 'POST /wp-json/sla/v1/scans',
-                'continue' => 'POST /wp-json/sla/v1/scans/{id}/continue',
-                'report' => 'GET /wp-json/sla/v1/report',
-            ],
-        ]);
-    }
-
-    public function rest_report(WP_REST_Request $request): WP_REST_Response {
-        $scan = $this->current_scan();
-        if (!$scan) {
-            return new WP_REST_Response([
-                'available' => false,
-                'message' => 'هنوز گزارش موفقی ثبت نشده است. برای شروع، یک اسکن صریح ایجاد کنید.',
-                'links' => [],
-            ], 200);
-        }
-
-        $page = max(1, (int) $request->get_param('page'));
-        $per_page = max(1, min(100, (int) $request->get_param('per_page')));
-        $type = sanitize_key((string) $request->get_param('link_type'));
-        $source_type = sanitize_key((string) $request->get_param('source_type'));
-        $search = sanitize_text_field((string) $request->get_param('search'));
-        $total = $this->count_links((int) $scan->id, $type, $source_type, $search);
-        $rows = $this->get_links((int) $scan->id, $page, $type, $source_type, $search, $per_page);
-        $links = array_map(static function ($row): array {
-            return [
-                'source_id' => (int) $row->source_post_id,
-                'source_title' => (string) $row->source_title,
-                'source_type' => (string) $row->source_type,
-                'source_edit_url' => get_edit_post_link((int) $row->source_post_id, 'raw') ?: '',
-                'anchor_text' => (string) $row->anchor_text,
-                'url' => (string) $row->url,
-                'link_type' => (string) $row->link_type,
-                'empty_anchor' => (string) $row->anchor_text === '',
-            ];
-        }, $rows);
-
-        return rest_ensure_response([
-            'available' => true,
-            'scan_id' => (int) $scan->id,
-            'completed_at' => $scan->completed_at,
-            'counts' => $this->report_counts((int) $scan->id),
-            'filters' => [
-                'link_type' => in_array($type, ['internal', 'external'], true) ? $type : 'all',
-                'source_type' => in_array($source_type, ['post', 'page', 'product'], true) ? $source_type : 'all',
-                'search' => $search,
-            ],
-            'pagination' => [
-                'page' => $page,
-                'per_page' => $per_page,
-                'total' => $total,
-                'total_pages' => (int) ceil($total / $per_page),
-            ],
-            'links' => $links,
-            'without_internal_links' => $this->get_sources_without_internal((int) $scan->id),
-            'scope_notice' => 'گزارش فقط محتوای ذخیره‌شدهٔ نوشته‌ها، برگه‌ها و محصولات منتشرشده را بررسی می‌کند؛ مقصد لینک‌ها را از طریق اینترنت درخواست نمی‌کند و هیچ محتوایی را تغییر نمی‌دهد.',
-        ]);
-    }
-
-    public function rest_start_scan(WP_REST_Request $request): WP_REST_Response {
-        global $wpdb;
-        $wpdb->query($wpdb->prepare(
-            "UPDATE {$this->scans_table} SET status = %s WHERE status = %s AND started_at < DATE_SUB(%s, INTERVAL 2 HOUR)",
-            'abandoned',
-            'running',
-            current_time('mysql')
-        ));
-        $running = $wpdb->get_var($wpdb->prepare(
-            "SELECT id FROM {$this->scans_table} WHERE status = %s LIMIT 1",
-            'running'
-        ));
-        if ($running) {
-            return new WP_REST_Response(['code' => 'sla_scan_running', 'message' => 'یک اسکن دیگر فعال است.', 'scan_id' => (int) $running], 409);
-        }
-
-        $total = (int) $wpdb->get_var("SELECT COUNT(ID) FROM {$wpdb->posts} WHERE post_status = 'publish' AND post_type IN ('post','page','product')");
-        $inserted = $wpdb->insert($this->scans_table, [
-            'token_hash' => hash('sha256', wp_generate_password(64, false, false)),
-            'status' => 'running',
-            'is_current' => 0,
-            'started_at' => current_time('mysql'),
-            'last_post_id' => 0,
-            'total_posts' => $total,
-            'processed_posts' => 0,
-        ], ['%s','%s','%d','%s','%d','%d','%d']);
-        if (!$inserted) {
-            return new WP_REST_Response(['code' => 'sla_scan_create_failed', 'message' => 'ذخیرهٔ وضعیت اسکن ممکن نشد.'], 500);
-        }
-
-        return new WP_REST_Response([
-            'scan_id' => (int) $wpdb->insert_id,
-            'status' => 'running',
-            'total_posts' => $total,
-            'processed_posts' => 0,
-            'next_action' => 'POST /wp-json/sla/v1/scans/' . (int) $wpdb->insert_id . '/continue',
-            'note' => 'اسکن به‌صورت صریح درخواست شده است. برای ادامه، مسیر continue را تا رسیدن status به complete فراخوانی کنید.',
-        ], 201);
-    }
-
-    public function rest_scan_status(WP_REST_Request $request): WP_REST_Response {
-        global $wpdb;
-        $id = (int) $request['id'];
-        $scan = $wpdb->get_row($wpdb->prepare(
-            "SELECT id, status, started_at, completed_at, total_posts, processed_posts, error_message FROM {$this->scans_table} WHERE id = %d",
-            $id
-        ));
-        if (!$scan) {
-            return new WP_REST_Response(['code' => 'sla_scan_not_found', 'message' => 'اسکن پیدا نشد.'], 404);
-        }
-        return rest_ensure_response([
-            'scan_id' => (int) $scan->id,
-            'status' => (string) $scan->status,
-            'started_at' => $scan->started_at,
-            'completed_at' => $scan->completed_at,
-            'total_posts' => (int) $scan->total_posts,
-            'processed_posts' => (int) $scan->processed_posts,
-            'percent' => (int) min(100, floor(((int) $scan->processed_posts / max(1, (int) $scan->total_posts)) * 100)),
-            'error' => $scan->error_message ?: null,
-        ]);
-    }
-
-    public function rest_continue_scan(WP_REST_Request $request): WP_REST_Response {
-        global $wpdb;
-        require_once SLA_DIR . 'includes/class-sla-parser.php';
-        $scan_id = (int) $request['id'];
-        $scan = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$this->scans_table} WHERE id = %d", $scan_id));
-        if (!$scan || $scan->status !== 'running' || (int) $scan->is_current === 1) {
-            return new WP_REST_Response(['code' => 'sla_scan_not_running', 'message' => 'اسکن در حال اجرا پیدا نشد.'], 409);
-        }
-
-        $wpdb->query('START TRANSACTION');
-        try {
-            $posts = $wpdb->get_results($wpdb->prepare(
-                "SELECT ID, post_title, post_type, post_content FROM {$wpdb->posts}
-                 WHERE post_status = 'publish' AND post_type IN ('post','page','product') AND ID > %d
-                 ORDER BY ID ASC LIMIT %d",
-                (int) $scan->last_post_id,
-                self::BATCH_SIZE
-            ));
-
-            if (!$posts) {
-                $updated = $wpdb->update($this->scans_table, [
-                    'status' => 'complete',
-                    'is_current' => 1,
-                    'completed_at' => current_time('mysql'),
-                ], ['id' => $scan_id, 'status' => 'running'], ['%s','%d','%s'], ['%d','%s']);
-                if ($updated === false) {
-                    throw new RuntimeException('scan finalization failed');
-                }
-                $wpdb->query($wpdb->prepare("UPDATE {$this->scans_table} SET is_current = 0 WHERE id <> %d AND is_current = 1", $scan_id));
-                $wpdb->query($wpdb->prepare("DELETE FROM {$this->links_table} WHERE scan_id <> %d", $scan_id));
-                $wpdb->query($wpdb->prepare("DELETE FROM {$this->sources_table} WHERE scan_id <> %d", $scan_id));
-                $wpdb->query($wpdb->prepare("DELETE FROM {$this->scans_table} WHERE id <> %d AND status <> %s", $scan_id, 'running'));
-                $wpdb->query('COMMIT');
-                return rest_ensure_response([
-                    'scan_id' => $scan_id,
-                    'status' => 'complete',
-                    'processed_posts' => (int) $scan->processed_posts,
-                    'total_posts' => (int) $scan->total_posts,
-                    'counts' => $this->report_counts($scan_id),
-                ]);
-            }
-
-            $last_id = (int) $scan->last_post_id;
-            $processed = (int) $scan->processed_posts;
-            foreach ($posts as $post) {
-                $last_id = (int) $post->ID;
-                $occurrence = 0;
-                $links = SLA_Parser::extract_links((string) $post->post_content, home_url('/'), get_permalink((int) $post->ID) ?: home_url('/'));
-                $internal_count = count(array_filter($links, static fn(array $link): bool => $link['type'] === 'internal'));
-                if ($wpdb->insert($this->sources_table, [
-                    'scan_id' => $scan_id,
-                    'source_post_id' => (int) $post->ID,
-                    'source_title' => (string) $post->post_title,
-                    'source_type' => (string) $post->post_type,
-                    'link_count' => count($links),
-                    'internal_count' => $internal_count,
-                ], ['%d','%d','%s','%s','%d','%d']) === false) {
-                    throw new RuntimeException('source row insert failed');
-                }
-                foreach ($links as $link) {
-                    if ($wpdb->insert($this->links_table, [
-                        'scan_id' => $scan_id,
-                        'source_post_id' => (int) $post->ID,
-                        'source_title' => (string) $post->post_title,
-                        'source_type' => (string) $post->post_type,
-                        'url' => $link['url'],
-                        'anchor_text' => $link['anchor'],
-                        'link_type' => $link['type'],
-                        'occurrence_no' => $occurrence++,
-                    ], ['%d','%d','%s','%s','%s','%s','%s','%d']) === false) {
-                        throw new RuntimeException('link row insert failed');
-                    }
-                }
-                $processed++;
-            }
-
-            $updated = $wpdb->update($this->scans_table, [
-                'last_post_id' => $last_id,
-                'processed_posts' => $processed,
-            ], ['id' => $scan_id, 'status' => 'running'], ['%d','%d'], ['%d','%s']);
-            if ($updated === false) {
-                throw new RuntimeException('scan progress update failed');
-            }
-            $wpdb->query('COMMIT');
-            return rest_ensure_response([
-                'scan_id' => $scan_id,
-                'status' => 'running',
-                'processed_posts' => $processed,
-                'total_posts' => (int) $scan->total_posts,
-                'percent' => (int) min(99, floor(($processed / max(1, (int) $scan->total_posts)) * 100)),
-                'next_action' => 'POST /wp-json/sla/v1/scans/' . $scan_id . '/continue',
-            ]);
-        } catch (Throwable $e) {
-            $wpdb->query('ROLLBACK');
-            $wpdb->update($this->scans_table, [
-                'status' => 'failed',
-                'error_message' => 'خطا هنگام ذخیره‌سازی نتایج.',
-            ], ['id' => $scan_id], ['%s','%s'], ['%d']);
-            return new WP_REST_Response([
-                'code' => 'sla_scan_batch_failed',
-                'message' => 'اسکن کامل نشد؛ گزارش موفق قبلی حفظ شده است.',
-            ], 500);
-        }
+    public function maybe_upgrade_schema(): void {
+        if (get_option('sla_db_version') !== SLA_VERSION) $this->activate();
     }
 
     public function admin_menu(): void {
@@ -545,6 +137,9 @@ final class Senoobar_Link_Auditor {
                 'done' => 'بررسی با موفقیت کامل شد.',
                 'failed' => 'بررسی کامل نشد؛ گزارش قبلی حفظ شده است.',
                 'cancelled' => 'بررسی لغو شد؛ گزارش قبلی حفظ شده است.',
+                'checking' => 'در حال بررسی دستی مقصد لینک‌ها…',
+                'checkDone' => 'بررسی مقصد لینک‌ها تمام شد.',
+                'copyDone' => 'گزارش کپی شد.',
             ],
         ]);
     }
@@ -555,7 +150,7 @@ final class Senoobar_Link_Auditor {
         }
 
         $current = $this->current_scan();
-        $counts = $current ? $this->report_counts((int) $current->id) : ['total' => 0, 'internal' => 0, 'external' => 0, 'empty' => 0, 'duplicates' => 0, 'without_internal' => 0];
+        $counts = $current ? $this->report_counts((int) $current->id) : ['total' => 0, 'internal' => 0, 'external' => 0, 'empty' => 0, 'duplicates' => 0, 'without_internal' => 0, 'broken' => 0];
         $page = max(1, absint($_GET['paged'] ?? 1));
         $type = sanitize_key($_GET['link_type'] ?? 'all');
         $source_type = sanitize_key($_GET['source_type'] ?? 'all');
@@ -565,10 +160,11 @@ final class Senoobar_Link_Auditor {
         ?>
         <div class="wrap sla-wrap" dir="rtl">
             <h1>Senoobar Link Auditor</h1>
-            <p>این ابزار فقط لینک‌های ذخیره‌شده در محتوای نوشته‌ها، برگه‌ها و محصولات را گزارش می‌کند. هیچ محتوایی را تغییر نمی‌دهد و آدرس مقصدها را از طریق اینترنت بررسی نمی‌کند.</p>
+            <p>این ابزار فقط در پیشخوان اجرا می‌شود. اسکن محتوا و بررسی مقصد لینک‌ها فقط با کلیک شما شروع می‌شود؛ هیچ محتوایی تغییر نمی‌کند.</p>
             <div class="sla-toolbar">
                 <button type="button" class="button button-primary" id="sla-rescan">بررسی مجدد کامل</button>
                 <button type="button" class="button" id="sla-cancel" hidden>لغو بررسی</button>
+                <button type="button" class="button" id="sla-check-broken" <?php disabled(!$current); ?>>بررسی دستی لینک‌های شکسته</button>
                 <span id="sla-status" role="status" aria-live="polite"><?php echo $current ? esc_html('آخرین بررسی: ' . ($current->completed_at ?: $current->started_at)) : esc_html('هنوز بررسی موفقی انجام نشده است.'); ?></span>
             </div>
             <div id="sla-progress-wrap" hidden><progress id="sla-progress" max="100" value="0"></progress><span id="sla-progress-label">0%</span></div>
@@ -580,7 +176,8 @@ final class Senoobar_Link_Auditor {
                 <div><strong><?php echo esc_html((string) $counts['external']); ?></strong><span>لینک خارجی</span></div>
                 <div><strong><?php echo esc_html((string) $counts['empty']); ?></strong><span>لنگر خالی</span></div>
                 <div><strong><?php echo esc_html((string) $counts['duplicates']); ?></strong><span>گروه لینک تکراری</span></div>
-                <div><strong><?php echo esc_html((string) $counts['without_internal']); ?></strong><span>محتوای بدون لینک داخلی</span></div>
+                <div><strong><?php echo esc_html((string) $counts['without_internal']); ?></strong><span>صفحات بدون لینک ورودی</span></div>
+                <div><strong><?php echo esc_html((string) $counts['broken']); ?></strong><span>لینک شکسته</span></div>
             </div>
 
             <?php if (!$current): ?>
@@ -634,9 +231,9 @@ final class Senoobar_Link_Auditor {
                     </div></div>
                 <?php endif; ?>
             <?php endif; ?>
-            <?php if ($current): $no_internal_sources = $this->get_sources_without_internal((int) $current->id); ?>
-                <h2>محتواهای بدون لینک داخلی (حداکثر 100 مورد)</h2>
-                <table class="widefat striped"><thead><tr><th>عنوان محتوا</th><th>نوع</th><th>تعداد لینک‌ها</th></tr></thead><tbody>
+            <?php if ($current): $no_internal_sources = $this->get_pages_without_incoming((int) $current->id); ?>
+                <h2>صفحات بدون لینک ورودی (حداکثر 100 مورد) <button type="button" class="button sla-copy-report" data-copy="sla-no-incoming">کپی این گزارش</button></h2>
+                <table class="widefat striped" id="sla-no-incoming"><thead><tr><th>عنوان محتوا</th><th>نوع</th><th>تعداد لینک خروجی</th></tr></thead><tbody>
                 <?php if (!$no_internal_sources): ?><tr><td colspan="3">همهٔ محتواها حداقل یک لینک داخلی دارند.</td></tr>
                 <?php else: foreach ($no_internal_sources as $source): ?><tr>
                     <td><a href="<?php echo esc_url(get_edit_post_link((int) $source->source_post_id) ?: ''); ?>"><?php echo esc_html($source->source_title ?: '(بدون عنوان)'); ?></a></td>
@@ -644,8 +241,20 @@ final class Senoobar_Link_Auditor {
                     <td><?php echo esc_html((string) $source->link_count); ?></td>
                 </tr><?php endforeach; endif; ?>
                 </tbody></table>
+                <h2>تعداد لینک‌های داخلی ورودی به هر صفحه <button type="button" class="button sla-copy-report" data-copy="sla-incoming">کپی این گزارش</button></h2>
+                <?php $incoming = $this->get_incoming_report((int) $current->id); ?>
+                <table class="widefat striped" id="sla-incoming"><thead><tr><th>صفحه مقصد</th><th>تعداد لینک ورودی</th><th>صفحات لینک‌دهنده</th></tr></thead><tbody>
+                <?php foreach ($incoming as $target): ?><tr><td><?php echo esc_html($target['title']); ?></td><td><?php echo esc_html((string) $target['count']); ?></td><td><?php echo esc_html(implode(' | ', $target['sources'])); ?></td></tr><?php endforeach; ?>
+                <?php if (!$incoming): ?><tr><td colspan="3">داده‌ای برای نمایش وجود ندارد.</td></tr><?php endif; ?>
+                </tbody></table>
+                <h2>لینک‌های شکسته <button type="button" class="button sla-copy-report" data-copy="sla-broken-links">کپی این گزارش</button></h2>
+                <p class="description">با دکمهٔ بررسی دستی، مقصدها در دسته‌های کوچک بررسی می‌شوند. خطای اتصال به‌تنهایی به‌عنوان لینک شکسته قطعی ثبت نمی‌شود.</p>
+                <table class="widefat striped" id="sla-broken-links"><thead><tr><th>صفحه مبدأ</th><th>آدرس مقصد</th><th>نتیجه</th><th>HTTP</th></tr></thead><tbody>
+                <?php $broken = $this->get_checked_links((int) $current->id, ['broken']); foreach ($broken as $item): ?><tr><td><?php echo esc_html($item->source_title); ?></td><td class="sla-url"><code><?php echo esc_html($item->url); ?></code></td><td><?php echo esc_html($item->check_message); ?></td><td><?php echo esc_html((string) $item->check_code); ?></td></tr><?php endforeach; ?>
+                <?php if (!$broken): ?><tr><td colspan="4">هنوز لینک شکستهٔ تأییدشده‌ای ثبت نشده است.</td></tr><?php endif; ?>
+                </tbody></table>
             <?php endif; ?>
-            <p class="description">فهرست نشان‌دهندهٔ لینک‌های موجود در آخرین بررسی موفق است. لینک‌های تکراری عمداً جداگانه نگه داشته می‌شوند تا محل هر استفاده قابل شناسایی باشد.</p>
+            <p class="description">فهرست لینک‌ها از محتوای ذخیره‌شده ساخته می‌شود؛ لینک‌های تکراری جداگانه حفظ می‌شوند.</p>
         </div>
         <?php
     }
@@ -748,7 +357,8 @@ final class Senoobar_Link_Auditor {
                         'anchor_text' => $link['anchor'],
                         'link_type' => $link['type'],
                         'occurrence_no' => $occurrence++,
-                    ], ['%d','%d','%s','%s','%s','%s','%s','%d']);
+                        'target_post_id' => ($link['type'] === 'internal' && $link['url'] !== '') ? (int) url_to_postid($link['url']) : 0,
+                    ], ['%d','%d','%s','%s','%s','%s','%s','%d','%d']);
                     if ($ok === false) {
                         throw new RuntimeException('link row insert failed');
                     }
@@ -878,7 +488,52 @@ final class Senoobar_Link_Auditor {
             'empty' => (int) ($row->empty_count ?? 0),
             'duplicates' => $duplicates,
             'without_internal' => $without_internal,
+            'broken' => (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$this->links_table} WHERE scan_id = %d AND check_status = %s", $scan_id, 'broken')),
         ];
+    }
+
+    private function get_pages_without_incoming(int $scan_id): array {
+        global $wpdb;
+        return $wpdb->get_results($wpdb->prepare("SELECT s.source_post_id, s.source_title, s.source_type, s.link_count FROM {$this->sources_table} s LEFT JOIN (SELECT DISTINCT scan_id, target_post_id FROM {$this->links_table} WHERE scan_id = %d AND target_post_id > 0) t ON t.scan_id = s.scan_id AND t.target_post_id = s.source_post_id WHERE s.scan_id = %d AND t.target_post_id IS NULL ORDER BY s.source_title ASC LIMIT 100", $scan_id, $scan_id)) ?: [];
+    }
+
+    private function get_incoming_report(int $scan_id): array {
+        global $wpdb;
+        $targets = $wpdb->get_results($wpdb->prepare("SELECT target_post_id, COUNT(*) AS incoming_count FROM {$this->links_table} WHERE scan_id = %d AND target_post_id > 0 GROUP BY target_post_id ORDER BY incoming_count DESC, target_post_id ASC LIMIT 200", $scan_id)) ?: [];
+        $report = [];
+        foreach ($targets as $target) {
+            $sources = $wpdb->get_col($wpdb->prepare("SELECT DISTINCT source_title FROM {$this->links_table} WHERE scan_id = %d AND target_post_id = %d ORDER BY source_title ASC LIMIT 30", $scan_id, (int) $target->target_post_id));
+            $report[] = ['title' => (string) (get_the_title((int) $target->target_post_id) ?: ('محتوا #' . (int) $target->target_post_id)), 'count' => (int) $target->incoming_count, 'sources' => array_map('strval', $sources ?: [])];
+        }
+        return $report;
+    }
+
+    private function get_checked_links(int $scan_id, array $statuses): array {
+        global $wpdb;
+        $statuses = array_values(array_filter($statuses, static fn($status) => in_array($status, ['broken', 'ok', 'unknown'], true)));
+        if (!$statuses) return [];
+        $holders = implode(',', array_fill(0, count($statuses), '%s'));
+        return $wpdb->get_results($wpdb->prepare("SELECT source_post_id, source_title, url, check_status, check_code, check_message FROM {$this->links_table} WHERE scan_id = %d AND check_status IN ({$holders}) ORDER BY check_status, source_post_id LIMIT 500", ...array_merge([$scan_id], $statuses))) ?: [];
+    }
+
+    public function ajax_check_broken_batch(): void {
+        $this->verify_ajax_request(); global $wpdb; $scan = $this->current_scan();
+        if (!$scan) wp_send_json_error(['message' => 'ابتدا یک اسکن کامل و موفق اجرا کنید.'], 400);
+        $rows = $wpdb->get_results($wpdb->prepare("SELECT id, url FROM {$this->links_table} WHERE scan_id = %d AND check_status = %s AND url LIKE %s ORDER BY id ASC LIMIT 5", (int) $scan->id, 'unchecked', 'http%'));
+        if (!$rows) { $remaining = (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$this->links_table} WHERE scan_id = %d AND check_status = %s AND url LIKE %s", (int) $scan->id, 'unchecked', 'http%')); wp_send_json_success(['done' => true, 'checked' => 0, 'remaining' => $remaining]); }
+        foreach ($rows as $row) {
+            $url = esc_url_raw((string) $row->url, ['http', 'https']);
+            if ($url === '' || !wp_http_validate_url($url)) { $status = 'unknown'; $code = 0; $message = 'آدرس نامعتبر یا غیرقابل بررسی'; }
+            else {
+                $response = wp_safe_remote_head($url, ['timeout' => 3, 'redirection' => 2, 'limit_response_size' => 1024, 'reject_unsafe_urls' => true]);
+                if (!is_wp_error($response) && in_array((int) wp_remote_retrieve_response_code($response), [405, 501], true)) $response = wp_safe_remote_get($url, ['timeout' => 3, 'redirection' => 2, 'limit_response_size' => 1024, 'headers' => ['Range' => 'bytes=0-0'], 'reject_unsafe_urls' => true]);
+                if (is_wp_error($response)) { $status = 'unknown'; $code = 0; $message = 'خطای اتصال؛ نیازمند بررسی مجدد'; }
+                else { $code = (int) wp_remote_retrieve_response_code($response); if ($code >= 200 && $code < 400) { $status = 'ok'; $message = 'پاسخ معتبر'; } elseif ($code >= 400) { $status = 'broken'; $message = 'خطای HTTP ' . $code; } else { $status = 'unknown'; $message = 'پاسخ نامشخص'; } }
+            }
+            $wpdb->update($this->links_table, ['check_status' => $status, 'check_code' => $code, 'check_message' => substr($message, 0, 250), 'checked_at' => current_time('mysql')], ['id' => (int) $row->id], ['%s','%d','%s','%s'], ['%d']);
+        }
+        $remaining = (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$this->links_table} WHERE scan_id = %d AND check_status = %s AND url LIKE %s", (int) $scan->id, 'unchecked', 'http%'));
+        wp_send_json_success(['done' => $remaining === 0, 'checked' => count($rows), 'remaining' => $remaining]);
     }
 
     private function get_sources_without_internal(int $scan_id): array {
