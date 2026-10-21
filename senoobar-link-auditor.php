@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Senoobar Link Auditor
  * Description: گزارش لینک‌های ذخیره‌شده در نوشته‌ها، برگه‌ها و محصولات ووکامرس؛ بدون تغییر محتوا.
- * Version: 0.3.0
+ * Version: 0.4.0
  * Requires at least: 6.2
  * Requires PHP: 8.0
  * Author: Senoobar
@@ -14,7 +14,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('SLA_VERSION', '0.3.0');
+define('SLA_VERSION', '0.4.0');
 define('SLA_FILE', __FILE__);
 define('SLA_DIR', plugin_dir_path(__FILE__));
 define('SLA_URL', plugin_dir_url(__FILE__));
@@ -78,7 +78,9 @@ final class Senoobar_Link_Auditor {
             target_post_id bigint(20) unsigned NOT NULL DEFAULT 0,
             check_status varchar(20) NOT NULL DEFAULT 'unchecked',
             check_code smallint(5) unsigned NOT NULL DEFAULT 0,
+            final_code smallint(5) unsigned NOT NULL DEFAULT 0,
             check_message varchar(255) NOT NULL DEFAULT '',
+            final_url text NULL,
             redirect_chain text NULL,
             checked_at datetime NULL,
             url text NOT NULL,
@@ -599,6 +601,7 @@ final class Senoobar_Link_Auditor {
 
         foreach ($rows as $row) {
             $current_url = esc_url_raw((string) $row->url, ['http', 'https']);
+            $initial_url = $current_url;
             $visited = [];
             $codes = [];
             $status = 'unknown';
@@ -651,8 +654,8 @@ final class Senoobar_Link_Auditor {
                             break;
                         }
                         if ($hop >= self::REDIRECT_HOP_LIMIT) {
-                            $status = 'redirect_loop';
-                            $message = 'بیش از سقف مجاز ریدایرکت؛ بررسی متوقف شد';
+                            $status = 'redirect_limit';
+                            $message = 'بیش از سقف مجاز ریدایرکت؛ حلقهٔ قطعی اثبات نشد';
                             break;
                         }
                         if (class_exists('WP_Http')) {
