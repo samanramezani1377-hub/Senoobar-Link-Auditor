@@ -50,4 +50,12 @@ sla_assert(count($duplicates) === 2, 'duplicate occurrences are preserved for re
 $externalSubdomain = SLA_Parser::extract_links('<a href="https://shop.senoobar.ir/">فروشگاه</a>', $home);
 sla_assert($externalSubdomain[0]['type'] === 'external', 'a different hostname is not assumed internal');
 
-echo "Parser tests passed (9 assertions).\n";
+$relative = SLA_Parser::extract_links('<a href="related">مرتبط</a>', $home, 'https://senoobar.ir/blog/article/');
+sla_assert($relative[0]['url'] === 'https://senoobar.ir/blog/article/related', 'resolve plain relative URL against source permalink');
+
+$mail = SLA_Parser::extract_links('<a href="mailto:hello@example.com">ایمیل</a>', $home);
+sla_assert($mail[0]['url'] === 'mailto:hello@example.com', 'preserve non-web contact links in the inventory');
+sla_assert($mail[0]['type'] === 'external', 'contact links are not classified as internal URLs');
+sla_assert($links[2]['type'] === 'internal', 'empty href is treated as a same-document link');
+
+echo "Parser tests passed (13 assertions).\n";
