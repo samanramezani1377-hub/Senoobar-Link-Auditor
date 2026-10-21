@@ -747,15 +747,15 @@ final class Senoobar_Link_Auditor {
                 "SELECT COUNT(*) FROM {$this->links_table} n
                  INNER JOIN {$this->links_table} o ON o.scan_id = %d AND o.source_post_id = n.source_post_id
                     AND o.url = n.url AND o.anchor_text = n.anchor_text AND o.link_type = n.link_type AND o.occurrence_no = n.occurrence_no
-                 WHERE n.scan_id = %d AND n.check_status IN ('broken','redirect_chain','redirect_loop')
-                   AND o.check_status NOT IN ('broken','redirect_chain','redirect_loop','unchecked')",
+                 WHERE n.scan_id = %d AND n.check_status IN ('broken','redirect','redirect_chain','redirect_loop')
+                   AND o.check_status NOT IN ('broken','redirect','redirect_chain','redirect_loop','unchecked')",
                 $previous, $current_id
             ));
             $resolved_problems = (int) $wpdb->get_var($wpdb->prepare(
                 "SELECT COUNT(*) FROM {$this->links_table} o
                  INNER JOIN {$this->links_table} n ON n.scan_id = %d AND n.source_post_id = o.source_post_id
                     AND n.url = o.url AND n.anchor_text = o.anchor_text AND n.link_type = o.link_type AND n.occurrence_no = o.occurrence_no
-                 WHERE o.scan_id = %d AND o.check_status IN ('broken','redirect_chain','redirect_loop')
+                 WHERE o.scan_id = %d AND o.check_status IN ('broken','redirect','redirect_chain','redirect_loop')
                    AND n.check_status = %s",
                 $current_id, $previous, 'ok'
             ));
