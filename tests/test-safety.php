@@ -15,7 +15,7 @@ sla_safety_assert(str_contains($main, "register_rest_route('sla/v1', '/scans'"),
 sla_safety_assert(str_contains($main, "register_rest_route('sla/v1', '/scans/(?P<id>"), 'scan status and continuation REST routes are registered');
 sla_safety_assert(str_contains($main, "'permission_callback' => [\$this, 'rest_admin_permission']"), 'REST routes require administrator permission');
 sla_safety_assert(str_contains($main, "return current_user_can('manage_options');"), 'REST permission callback checks manage_options');
-sla_safety_assert(str_contains($main, "min(100, (int) $request->get_param('per_page'))"), 'report page size is capped at 100');
+sla_safety_assert(str_contains($main, "min(100, (int) \$request->get_param('per_page'))"), 'report page size is capped at 100');
 sla_safety_assert(str_contains($main, "private const BATCH_SIZE = 20;"), 'agent scans use bounded batches');
 sla_safety_assert(str_contains($main, "wp_abilities_api_categories_init"), 'custom Abilities API category is registered before abilities');
 sla_safety_assert(str_contains($main, "'category' => 'senoobar-link-auditor'"), 'abilities use the plugin-owned category');
@@ -28,9 +28,9 @@ sla_safety_assert(!str_contains($main, "add_action('wp_ajax_nopriv_"), 'no unaut
 sla_safety_assert(str_contains($main, "current_user_can('manage_options')"), 'administrative capability is enforced');
 sla_safety_assert(str_contains($main, '[=+@-]') && str_contains($main, 'csv_safe'), 'CSV formula-leading values are neutralized');
 sla_safety_assert(str_contains($main, 'ENGINE=InnoDB'), 'snapshot tables support transactional replacement');
-sla_safety_assert(str_contains($main, ", '\"', '')"), 'CSV export specifies an empty escape parameter for PHP 8.4');
+sla_safety_assert(str_contains($main, "'\"', '');"), 'CSV export specifies an empty escape parameter for PHP 8.4');
 sla_safety_assert(str_contains($js, "await request('sla_scan_batch'"), 'scan batches are user-session driven');
 sla_safety_assert(!preg_match('/setInterval\\s*\\(|setTimeout\\s*\\(/', $js), 'no background polling or timer is used');
 sla_safety_assert(is_string($agentDocs) && str_contains($agentDocs, 'route/method allowlist'), 'agent documentation explains MCP route grants');
 sla_safety_assert(str_contains($agentDocs, 'Do not try to work around the second condition by making endpoints public'), 'agent documentation preserves route security');
-echo "Safety checks passed (26 assertions).\n";
+echo "Safety checks passed (27 assertions).\n";
