@@ -20,7 +20,13 @@ sla_safety_assert(str_contains($main, 'get_pages_without_incoming'), 'pages with
 sla_safety_assert(str_contains($main, 'get_incoming_report'), 'inbound-link counts and sources are reported');
 sla_safety_assert(str_contains($main, 'wp_safe_remote_head') && str_contains($main, 'wp_safe_remote_get'), 'manual link checks use safe HTTP methods');
 sla_safety_assert(str_contains($main, "'timeout' => 3") && str_contains($main, "'redirection' => 2"), 'destination checks have bounded timeout and redirects');
-sla_safety_assert(str_contains($main, "id=\"sla-broken-links\"") && str_contains($main, "id=\"sla-incoming\""), 'broken and inbound reports have copyable tables');
+sla_safety_assert(str_contains($main, "id=\\"sla-broken-links\\"") && str_contains($main, "id=\\"sla-incoming\\""), 'broken and inbound reports have copyable tables');
+sla_safety_assert(str_contains($main, "redirect_chain text NULL"), 'redirect paths are stored in the snapshot');
+sla_safety_assert(str_contains($main, "REDIRECT_HOP_LIMIT = 3") && str_contains($main, "'redirection' => 0"), 'redirect tracing has a strict hop cap and disables automatic following');
+sla_safety_assert(str_contains($main, "'timeout' => 2") && str_contains($main, "wp_safe_remote_head"), 'HTTP checks use bounded timeouts and safe requests');
+sla_safety_assert(str_contains($main, "function get_scan_diff") && str_contains($main, "new_problems") && str_contains($main, "resolved_problems"), 'history compares link changes and checked HTTP problems');
+sla_safety_assert(str_contains($main, "HISTORY_LIMIT = 10") && str_contains($main, "ORDER BY completed_at DESC"), 'history retention is bounded');
+sla_safety_assert(str_contains($main, "name=\\"check_status\\"") && str_contains($main, "HTTP status category"), 'HTTP status filter and CSV columns are available');
 sla_safety_assert(str_contains($main, '[=+@-]') && str_contains($main, 'csv_safe'), 'CSV formula-leading values are neutralized');
 sla_safety_assert(str_contains($main, 'ENGINE=InnoDB'), 'snapshot tables support transactional replacement');
 sla_safety_assert(str_contains($main, "'\"', '');"), 'CSV export specifies empty escape parameter for PHP 8.4');
