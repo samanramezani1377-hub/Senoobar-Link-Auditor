@@ -23,3 +23,7 @@
 .sla-copy-report { margin-inline-start: 8px; }
 #sla-incoming, #sla-no-incoming, #sla-broken-links { margin: 12px 0 24px; }
 #sla-incoming td, #sla-no-incoming td, #sla-broken-links td { vertical-align: top; }
+
+#sla-redirect-links, #sla-scan-diff, #sla-scan-history { margin: 12px 0 24px; }
+#sla-redirect-links td, #sla-scan-diff td, #sla-scan-history td { vertical-align: top; }
+#sla-redirect-links .sla-url { white-space: pre-line; }
