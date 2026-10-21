@@ -622,10 +622,11 @@ final class Senoobar_Link_Auditor {
                         break;
                     }
 
-                    $code = (int) wp_remote_retrieve_response_code($response);
-                    $codes[] = $code;
-                    $chain[] = $code . ' ' . $current_url;
-                    if (in_array($code, [301, 302, 303, 307, 308], true)) {
+                    $response_code = (int) wp_remote_retrieve_response_code($response);
+                    if ($code === 0) $code = $response_code;
+                    $codes[] = $response_code;
+                    $chain[] = $response_code . ' ' . $current_url;
+                    if (in_array($response_code, [301, 302, 303, 307, 308], true))
                         $location = (string) wp_remote_retrieve_header($response, 'location');
                         if ($location === '') {
                             $status = 'unknown';
@@ -652,15 +653,15 @@ final class Senoobar_Link_Auditor {
                         continue;
                     }
 
-                    if ($code >= 400) {
+                    if ($response_code >= 400) {
                         $status = 'broken';
-                        $message = 'خطای HTTP ' . $code;
-                    } elseif ($code >= 200 && $code < 300) {
+                        $message = 'خطای HTTP ' . $response_code;
+                    } elseif ($response_code >= 200 && $response_code < 300) {
                         $status = count($codes) > 1 ? (count($codes) === 2 ? 'redirect' : 'redirect_chain') : 'ok';
-                        $message = count($codes) > 1 ? 'ریدایرکت به پاسخ نهایی HTTP ' . $code : 'پاسخ معتبر';
+                        $message = count($codes) > 1 ? 'ریدایرکت به پاسخ نهایی HTTP ' . $response_code : 'پاسخ معتبر';
                     } else {
                         $status = 'unknown';
-                        $message = 'پاسخ HTTP نامعمول ' . $code;
+                        $message = 'پاسخ HTTP نامعمول ' . $response_code;
                     }
                     break;
                 }
