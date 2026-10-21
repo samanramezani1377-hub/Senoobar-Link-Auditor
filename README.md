@@ -9,8 +9,10 @@ A standalone, admin-only WordPress plugin for practical internal-link analysis.
 - List pages with zero inbound internal links, so orphaned content can be found.
 - Manually check HTTP/HTTPS link destinations in small batches; broken HTTP responses are separated from connection errors or unknown results.
 - Copy each report table independently with its own button, including broken links, pages with no inbound links, and inbound-link counts.
-- Search, filters, pagination, summary counts, and CSV export.
+- Search, link-type/content-type/HTTP-status filters, pagination, summary counts, and CSV export including HTTP status and check details.
+- Manually traces up to three redirect hops per URL, recording 301/302-style redirects, chains, loops/overlong chains, 404/410 and other HTTP errors.
 - Keeps the last successful content scan visible while a manual rescan runs.
+- Retains the latest 10 successful scan snapshots and compares added/removed links. When both snapshots have been manually checked, it also compares new and resolved HTTP issues.
 - Scans only after an administrator clicks the rescan button; broken-link checks also require a separate explicit click.
 - No frontend assets/queries for scanning, no cron jobs, persistent workers, timers, or idle polling.
 - Does not edit content, create posts/pages, or alter SEO settings.
@@ -27,7 +29,9 @@ A standalone, admin-only WordPress plugin for practical internal-link analysis.
 
 The content scan examines stored `post_content` for published posts, pages, and products. Navigation menus, headers/footers, widgets, scripts, and rendered frontend output are outside scope. A link is internal when its hostname exactly matches the site's hostname; subdomains are treated as separate hosts. Inbound counts depend on WordPress resolving the saved URL to a published post/page/product. Rescan after upgrading to populate the new inbound-link fields for the existing report.
 
-The broken-link checker is a separate, user-triggered operation. It checks HTTP/HTTPS URLs in small batches using WordPress safe HTTP requests with short timeouts and bounded redirects. HTTP 4xx/5xx responses are reported as broken; connection errors and unclassifiable responses are not treated as confirmed broken links. Some hosts block HEAD requests or respond differently to bots, so verify important URLs manually before making content changes.
+The destination checker is a separate, user-triggered operation. It checks three HTTP/HTTPS URLs per request, uses WordPress safe HTTP requests with a two-second per-request timeout, disables automatic redirect following, and follows at most three redirect hops. It records the visited URLs/status codes and distinguishes direct responses, redirects, chains, loops/overlong chains, HTTP errors (including 404/410), and unknown network results. Timeouts or blocked requests are not treated as confirmed broken links. Some hosts block HEAD requests or respond differently to bots, so verify important URLs manually before making content changes.
+
+History retains at most 10 successful snapshots. Link differences are compared by source post, URL, anchor, link type, and occurrence position; reordered links can therefore appear as changes. HTTP issue comparisons require manual destination checks on both snapshots and compare matched links only.
 
 ## Performance and data behavior
 
