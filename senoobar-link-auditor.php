@@ -452,6 +452,7 @@ final class Senoobar_Link_Auditor {
         }
         $type = sanitize_key($_GET['link_type'] ?? 'all');
         $source_type = sanitize_key($_GET['source_type'] ?? 'all');
+        $check_status = sanitize_key($_GET['check_status'] ?? 'all');
         $search = sanitize_text_field(wp_unslash($_GET['s'] ?? ''));
         nocache_headers();
         header('Content-Type: text/csv; charset=UTF-8');
@@ -461,7 +462,7 @@ final class Senoobar_Link_Auditor {
         fputcsv($out, ['Source ID', 'Source title', 'Source type', 'Anchor text', 'Destination URL', 'Link type', 'HTTP status category', 'HTTP code', 'Check details'], ',', '"', '');
         $page = 1;
         do {
-            $rows = $this->get_links($scan_id, $page, $type, $source_type, $search, 1000);
+            $rows = $this->get_links($scan_id, $page, $type, $source_type, $search, 1000, $check_status);
             foreach ($rows as $row) {
                 fputcsv($out, [
                 (int) $row->source_post_id,
@@ -722,7 +723,6 @@ final class Senoobar_Link_Auditor {
                 SELECT 1 FROM {$this->links_table} n WHERE n.scan_id = %d AND n.source_post_id = o.source_post_id AND n.url = o.url AND n.anchor_text = o.anchor_text AND n.link_type = o.link_type AND n.occurrence_no = o.occurrence_no
             )", $previous, $current_id
         ));
-        $problem_statuses = "'broken','redirect_chain','redirect_loop'";
         $comparable_current = (int) $wpdb->get_var($wpdb->prepare(
             "SELECT COUNT(*) FROM {$this->links_table} WHERE scan_id = %d AND check_status <> %s", $current_id, 'unchecked'
         ));
