@@ -63,7 +63,7 @@ final class Senoobar_Link_Auditor {
             PRIMARY KEY  (id),
             KEY current_status (is_current,status),
             KEY status_started (status,started_at)
-        ) {$charset};");
+        ) ENGINE=InnoDB {$charset};");
 
         dbDelta("CREATE TABLE {$links} (
             id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
@@ -80,7 +80,7 @@ final class Senoobar_Link_Auditor {
             KEY scan_type (scan_id,link_type),
             KEY source_post (source_post_id),
             KEY scan_source_type (scan_id,source_type)
-        ) {$charset};");
+        ) ENGINE=InnoDB {$charset};");
 
         dbDelta("CREATE TABLE {$sources} (
             scan_id bigint(20) unsigned NOT NULL,
@@ -92,7 +92,7 @@ final class Senoobar_Link_Auditor {
             PRIMARY KEY  (scan_id,source_post_id),
             KEY scan_internal (scan_id,internal_count),
             KEY scan_type (scan_id,source_type)
-        ) {$charset};");
+        ) ENGINE=InnoDB {$charset};");
     }
 
     public function admin_menu(): void {
