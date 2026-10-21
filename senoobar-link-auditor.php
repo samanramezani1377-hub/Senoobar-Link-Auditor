@@ -633,7 +633,7 @@ final class Senoobar_Link_Auditor {
                     if ($code === 0) $code = $response_code;
                     $codes[] = $response_code;
                     $chain[] = $response_code . ' ' . $current_url;
-                    if (in_array($response_code, [301, 302, 303, 307, 308], true))
+                    if (in_array($response_code, [301, 302, 303, 307, 308], true)) {
                         $location = (string) wp_remote_retrieve_header($response, 'location');
                         if ($location === '') {
                             $status = 'unknown';
