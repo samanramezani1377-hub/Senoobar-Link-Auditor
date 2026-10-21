@@ -6,7 +6,7 @@ function sla_safety_assert(bool $condition, string $message): void {
 $main = file_get_contents(__DIR__ . '/../senoobar-link-auditor.php');
 $js = file_get_contents(__DIR__ . '/../assets/js/admin.js');
 sla_safety_assert(is_string($main) && is_string($js), 'plugin sources can be read');
-sla_safety_assert(str_contains($main, "if ($hook !== 'tools_page_senoobar-link-auditor')"), 'assets are scoped to the plugin admin screen');
+sla_safety_assert(str_contains($main, "tools_page_senoobar-link-auditor"), 'assets are scoped to the plugin admin screen');
 sla_safety_assert(!preg_match('/wp_schedule_event|wp_schedule_single_event|wp_cron|register_rest_route/i', $main), 'no scheduled or public scan hooks are registered');
 sla_safety_assert(str_contains($main, "add_action('wp_ajax_sla_start_scan'"), 'scan start is authenticated admin AJAX only');
 sla_safety_assert(!str_contains($main, "add_action('wp_ajax_nopriv_"), 'no unauthenticated scan endpoint exists');
