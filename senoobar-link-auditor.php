@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Senoobar Link Auditor
  * Description: گزارش لینک‌های ذخیره‌شده در نوشته‌ها، برگه‌ها و محصولات ووکامرس؛ بدون تغییر محتوا.
- * Version: 0.2.0
+ * Version: 0.3.0
  * Requires at least: 6.2
  * Requires PHP: 8.0
  * Author: Senoobar
@@ -14,7 +14,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('SLA_VERSION', '0.2.0');
+define('SLA_VERSION', '0.3.0');
 define('SLA_FILE', __FILE__);
 define('SLA_DIR', plugin_dir_path(__FILE__));
 define('SLA_URL', plugin_dir_url(__FILE__));
@@ -22,6 +22,8 @@ define('SLA_URL', plugin_dir_url(__FILE__));
 final class Senoobar_Link_Auditor {
     private const BATCH_SIZE = 20;
     private const PAGE_SIZE = 50;
+    private const HISTORY_LIMIT = 10;
+    private const REDIRECT_HOP_LIMIT = 3;
     private string $scans_table;
     private string $links_table;
     private string $sources_table;
@@ -77,6 +79,7 @@ final class Senoobar_Link_Auditor {
             check_status varchar(20) NOT NULL DEFAULT 'unchecked',
             check_code smallint(5) unsigned NOT NULL DEFAULT 0,
             check_message varchar(255) NOT NULL DEFAULT '',
+            redirect_chain text NULL,
             checked_at datetime NULL,
             url text NOT NULL,
             anchor_text text NOT NULL,
@@ -154,9 +157,10 @@ final class Senoobar_Link_Auditor {
         $page = max(1, absint($_GET['paged'] ?? 1));
         $type = sanitize_key($_GET['link_type'] ?? 'all');
         $source_type = sanitize_key($_GET['source_type'] ?? 'all');
+        $check_status = sanitize_key($_GET['check_status'] ?? 'all');
         $search = sanitize_text_field(wp_unslash($_GET['s'] ?? ''));
-        $rows = $current ? $this->get_links((int) $current->id, $page, $type, $source_type, $search) : [];
-        $total_pages = $current ? (int) ceil($this->count_links((int) $current->id, $type, $source_type, $search) / self::PAGE_SIZE) : 0;
+        $rows = $current ? $this->get_links((int) $current->id, $page, $type, $source_type, $search, self::PAGE_SIZE, $check_status) : [];
+        $total_pages = $current ? (int) ceil($this->count_links((int) $current->id, $type, $source_type, $search, $check_status) / self::PAGE_SIZE) : 0;
         ?>
         <div class="wrap sla-wrap" dir="rtl">
             <h1>Senoobar Link Auditor</h1>
@@ -200,11 +204,23 @@ final class Senoobar_Link_Auditor {
                             <option value="product" <?php selected($source_type, 'product'); ?>>محصول</option>
                         </select>
                     </label>
+                    <label>وضعیت HTTP
+                        <select name="check_status">
+                            <option value="all" <?php selected($check_status, 'all'); ?>>همه</option>
+                            <option value="unchecked" <?php selected($check_status, 'unchecked'); ?>>بررسی‌نشده</option>
+                            <option value="ok" <?php selected($check_status, 'ok'); ?>>سالم</option>
+                            <option value="redirect" <?php selected($check_status, 'redirect'); ?>>ریدایرکت</option>
+                            <option value="redirect_chain" <?php selected($check_status, 'redirect_chain'); ?>>زنجیرهٔ ریدایرکت</option>
+                            <option value="redirect_loop" <?php selected($check_status, 'redirect_loop'); ?>>حلقه/زنجیرهٔ بیش‌ازحد</option>
+                            <option value="broken" <?php selected($check_status, 'broken'); ?>>خطای HTTP</option>
+                            <option value="unknown" <?php selected($check_status, 'unknown'); ?>>نامشخص</option>
+                        </select>
+                    </label>
                     <label>جست‌وجو
                         <input type="search" name="s" value="<?php echo esc_attr($search); ?>" placeholder="عنوان، متن لنگر یا آدرس">
                     </label>
                     <button class="button">اعمال فیلتر</button>
-                    <a class="button" href="<?php echo esc_url(wp_nonce_url(admin_url('admin-post.php?action=sla_export_csv&scan_id=' . (int) $current->id . '&link_type=' . rawurlencode($type) . '&source_type=' . rawurlencode($source_type) . '&s=' . rawurlencode($search)), 'sla_export_csv')); ?>">خروجی CSV</a>
+                    <a class="button" href="<?php echo esc_url(wp_nonce_url(admin_url('admin-post.php?action=sla_export_csv&scan_id=' . (int) $current->id . '&link_type=' . rawurlencode($type) . '&source_type=' . rawurlencode($source_type) . '&check_status=' . rawurlencode($check_status) . '&s=' . rawurlencode($search)), 'sla_export_csv')); ?>">خروجی CSV</a>
                 </form>
                 <h2>فهرست لینک‌ها <button type="button" class="button sla-copy-report" data-copy="sla-link-inventory">کپی این گزارش</button></h2>
                 <table class="widefat striped sla-table" id="sla-link-inventory">
@@ -226,13 +242,25 @@ final class Senoobar_Link_Auditor {
                 <?php if ($total_pages > 1): ?>
                     <div class="tablenav"><div class="tablenav-pages">
                     <?php echo wp_kses_post(paginate_links([
-                        'base' => add_query_arg(['page' => 'senoobar-link-auditor', 'paged' => '%#%', 'link_type' => $type, 'source_type' => $source_type, 's' => $search], admin_url('tools.php')),
+                        'base' => add_query_arg(['page' => 'senoobar-link-auditor', 'paged' => '%#%', 'link_type' => $type, 'source_type' => $source_type, 'check_status' => $check_status, 's' => $search], admin_url('tools.php')),
                         'format' => '', 'current' => $page, 'total' => $total_pages,
                     ])); ?>
                     </div></div>
                 <?php endif; ?>
             <?php endif; ?>
             <?php if ($current): $no_internal_sources = $this->get_pages_without_incoming((int) $current->id); ?>
+                <?php $history = $this->get_scan_history((int) $current->id); $diff = $this->get_scan_diff((int) $current->id); ?>
+                <h2>تاریخچه و مقایسهٔ اسکن‌ها</h2>
+                <?php if ($diff['previous']): ?>
+                    <p>مقایسهٔ آخرین اسکن موفق با اسکن قبلی: <strong><?php echo esc_html((string) $diff['added']); ?></strong> لینک/مورد جدید، <strong><?php echo esc_html((string) $diff['removed']); ?></strong> لینک/مورد حذف‌شده یا رفع‌شده.</p>
+                    <table class="widefat striped" id="sla-scan-diff"><thead><tr><th>تغییر</th><th>مبدأ</th><th>آدرس مقصد</th><th>متن لنگر</th></tr></thead><tbody>
+                    <?php foreach ($diff['samples'] as $change): ?><tr><td><?php echo esc_html($change['change']); ?></td><td><?php echo esc_html($change['source_title']); ?></td><td class="sla-url"><code><?php echo esc_html($change['url']); ?></code></td><td><?php echo esc_html($change['anchor']); ?></td></tr><?php endforeach; ?>
+                    <?php if (!$diff['samples']): ?><tr><td colspan="4">بین دو اسکن تغییر لینک قابل گزارش پیدا نشد.</td></tr><?php endif; ?>
+                    </tbody></table>
+                <?php else: ?><p>برای مقایسه، حداقل دو اسکن موفق لازم است.</p><?php endif; ?>
+                <table class="widefat striped" id="sla-scan-history"><thead><tr><th>شناسه</th><th>شروع</th><th>پایان</th><th>محتوای بررسی‌شده</th><th>تعداد لینک‌ها</th><th>وضعیت</th></tr></thead><tbody>
+                <?php foreach ($history as $past): ?><tr><td><?php echo esc_html((string) $past->id); ?></td><td><?php echo esc_html((string) $past->started_at); ?></td><td><?php echo esc_html((string) ($past->completed_at ?: '—')); ?></td><td><?php echo esc_html((string) $past->processed_posts); ?></td><td><?php echo esc_html((string) $past->link_count); ?></td><td><?php echo (int) $past->id === (int) $current->id ? 'اسکن فعلی' : 'اسکن قبلی'; ?></td></tr><?php endforeach; ?>
+                </tbody></table>
                 <h2>صفحات بدون لینک ورودی (حداکثر 100 مورد) <button type="button" class="button sla-copy-report" data-copy="sla-no-incoming">کپی این گزارش</button></h2>
                 <table class="widefat striped" id="sla-no-incoming"><thead><tr><th>عنوان محتوا</th><th>نوع</th><th>تعداد لینک خروجی</th></tr></thead><tbody>
                 <?php if (!$no_internal_sources): ?><tr><td colspan="3">همهٔ محتواها حداقل یک لینک داخلی دارند.</td></tr>
@@ -323,9 +351,18 @@ final class Senoobar_Link_Auditor {
                     'completed_at' => current_time('mysql'),
                 ], ['id' => $scan_id, 'status' => 'running'], ['%s','%d','%s'], ['%d','%s']);
                 $wpdb->query($wpdb->prepare("UPDATE {$this->scans_table} SET is_current = 0 WHERE id <> %d AND is_current = 1", $scan_id));
-                $wpdb->query($wpdb->prepare("DELETE FROM {$this->links_table} WHERE scan_id <> %d", $scan_id));
-                $wpdb->query($wpdb->prepare("DELETE FROM {$this->sources_table} WHERE scan_id <> %d", $scan_id));
-                $wpdb->query($wpdb->prepare("DELETE FROM {$this->scans_table} WHERE id <> %d AND status <> %s", $scan_id, 'running'));
+                // Keep a bounded history of completed snapshots; active scans are never removed here.
+                $keep_ids = $wpdb->get_col($wpdb->prepare("SELECT id FROM {$this->scans_table} WHERE status = %s ORDER BY completed_at DESC, id DESC LIMIT %d", 'complete', self::HISTORY_LIMIT));
+                $keep_ids = array_map('intval', $keep_ids ?: []);
+                if ($keep_ids) {
+                    $placeholders = implode(',', array_fill(0, count($keep_ids), '%d'));
+                    $old_ids = $wpdb->get_col($wpdb->prepare("SELECT id FROM {$this->scans_table} WHERE status = %s AND id NOT IN ({$placeholders})", ...array_merge(['complete'], $keep_ids)));
+                    foreach (array_map('intval', $old_ids ?: []) as $old_id) {
+                        $wpdb->delete($this->links_table, ['scan_id' => $old_id], ['%d']);
+                        $wpdb->delete($this->sources_table, ['scan_id' => $old_id], ['%d']);
+                        $wpdb->delete($this->scans_table, ['id' => $old_id, 'status' => 'complete'], ['%d', '%s']);
+                    }
+                }
                 $wpdb->query('COMMIT');
                 wp_send_json_success(['done' => true, 'processed' => (int) $scan->processed_posts, 'total' => (int) $scan->total_posts, 'percent' => 100]);
             }
@@ -416,7 +453,7 @@ final class Senoobar_Link_Auditor {
         header('Content-Disposition: attachment; filename="senoobar-link-auditor.csv"');
         $out = fopen('php://output', 'w');
         fwrite($out, "\xEF\xBB\xBF");
-        fputcsv($out, ['Source ID', 'Source title', 'Source type', 'Anchor text', 'Destination URL', 'Link type'], ',', '"', '');
+        fputcsv($out, ['Source ID', 'Source title', 'Source type', 'Anchor text', 'Destination URL', 'Link type', 'HTTP status category', 'HTTP code', 'Check details'], ',', '"', '');
         $page = 1;
         do {
             $rows = $this->get_links($scan_id, $page, $type, $source_type, $search, 1000);
@@ -428,6 +465,9 @@ final class Senoobar_Link_Auditor {
                 $this->csv_safe((string) $row->anchor_text),
                 $this->csv_safe((string) $row->url),
                     $row->link_type,
+                    (string) $row->check_status,
+                    (int) $row->check_code,
+                    $this->csv_safe((string) $row->check_message),
                 ], ',', '"', '');
             }
             $page++;
@@ -492,6 +532,7 @@ final class Senoobar_Link_Auditor {
             'empty' => (int) ($row->empty_count ?? 0),
             'duplicates' => $duplicates,
             'without_internal' => $without_internal,
+            'redirects' => (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$this->links_table} WHERE scan_id = %d AND check_status IN (%s,%s,%s)", $scan_id, 'redirect', 'redirect_chain', 'redirect_loop')),
             'broken' => (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$this->links_table} WHERE scan_id = %d AND check_status = %s", $scan_id, 'broken')),
         ];
     }
@@ -514,30 +555,181 @@ final class Senoobar_Link_Auditor {
 
     private function get_checked_links(int $scan_id, array $statuses): array {
         global $wpdb;
-        $statuses = array_values(array_filter($statuses, static fn($status) => in_array($status, ['broken', 'ok', 'unknown'], true)));
+        $statuses = array_values(array_filter($statuses, static fn($status) => in_array($status, ['broken', 'ok', 'unknown', 'redirect', 'redirect_chain', 'redirect_loop'], true)));
         if (!$statuses) return [];
         $holders = implode(',', array_fill(0, count($statuses), '%s'));
-        return $wpdb->get_results($wpdb->prepare("SELECT source_post_id, source_title, url, check_status, check_code, check_message FROM {$this->links_table} WHERE scan_id = %d AND check_status IN ({$holders}) ORDER BY check_status, source_post_id LIMIT 500", ...array_merge([$scan_id], $statuses))) ?: [];
+        return $wpdb->get_results($wpdb->prepare("SELECT source_post_id, source_title, url, check_status, check_code, check_message, redirect_chain FROM {$this->links_table} WHERE scan_id = %d AND check_status IN ({$holders}) ORDER BY check_status, source_post_id LIMIT 500", ...array_merge([$scan_id], $statuses))) ?: [];
     }
 
     public function ajax_check_broken_batch(): void {
-        $this->verify_ajax_request(); global $wpdb; $scan = $this->current_scan();
+        $this->verify_ajax_request();
+        global $wpdb;
+        $scan = $this->current_scan();
         if (!$scan) wp_send_json_error(['message' => 'ابتدا یک اسکن کامل و موفق اجرا کنید.'], 400);
-        $rows = $wpdb->get_results($wpdb->prepare("SELECT id, url FROM {$this->links_table} WHERE scan_id = %d AND check_status = %s AND url LIKE %s ORDER BY id ASC LIMIT 5", (int) $scan->id, 'unchecked', 'http%'));
-        if (!$rows) { $remaining = (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$this->links_table} WHERE scan_id = %d AND check_status = %s AND url LIKE %s", (int) $scan->id, 'unchecked', 'http%')); wp_send_json_success(['done' => true, 'checked' => 0, 'remaining' => $remaining]); }
-        foreach ($rows as $row) {
-            $url = esc_url_raw((string) $row->url, ['http', 'https']);
-            if ($url === '' || !wp_http_validate_url($url)) { $status = 'unknown'; $code = 0; $message = 'آدرس نامعتبر یا غیرقابل بررسی'; }
-            else {
-                $response = wp_safe_remote_head($url, ['timeout' => 3, 'redirection' => 2, 'limit_response_size' => 1024, 'reject_unsafe_urls' => true]);
-                if (!is_wp_error($response) && in_array((int) wp_remote_retrieve_response_code($response), [405, 501], true)) $response = wp_safe_remote_get($url, ['timeout' => 3, 'redirection' => 2, 'limit_response_size' => 1024, 'headers' => ['Range' => 'bytes=0-0'], 'reject_unsafe_urls' => true]);
-                if (is_wp_error($response)) { $status = 'unknown'; $code = 0; $message = 'خطای اتصال؛ نیازمند بررسی مجدد'; }
-                else { $code = (int) wp_remote_retrieve_response_code($response); if ($code >= 200 && $code < 400) { $status = 'ok'; $message = 'پاسخ معتبر'; } elseif ($code >= 400) { $status = 'broken'; $message = 'خطای HTTP ' . $code; } else { $status = 'unknown'; $message = 'پاسخ نامشخص'; } }
-            }
-            $wpdb->update($this->links_table, ['check_status' => $status, 'check_code' => $code, 'check_message' => substr($message, 0, 250), 'checked_at' => current_time('mysql')], ['id' => (int) $row->id], ['%s','%d','%s','%s'], ['%d']);
+
+        // Three URLs per request; each URL follows at most three redirects with a 2-second timeout.
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT id, url FROM {$this->links_table} WHERE scan_id = %d AND check_status = %s AND url LIKE %s ORDER BY id ASC LIMIT 3",
+            (int) $scan->id, 'unchecked', 'http%'
+        ));
+        if (!$rows) {
+            $remaining = (int) $wpdb->get_var($wpdb->prepare(
+                "SELECT COUNT(*) FROM {$this->links_table} WHERE scan_id = %d AND check_status = %s AND url LIKE %s",
+                (int) $scan->id, 'unchecked', 'http%'
+            ));
+            wp_send_json_success(['done' => true, 'checked' => 0, 'remaining' => $remaining]);
         }
-        $remaining = (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$this->links_table} WHERE scan_id = %d AND check_status = %s AND url LIKE %s", (int) $scan->id, 'unchecked', 'http%'));
+
+        foreach ($rows as $row) {
+            $current_url = esc_url_raw((string) $row->url, ['http', 'https']);
+            $visited = [];
+            $codes = [];
+            $status = 'unknown';
+            $code = 0;
+            $message = 'نتیجه نامشخص؛ نیازمند بررسی دستی';
+            $chain = [];
+            if ($current_url === '' || !wp_http_validate_url($current_url)) {
+                $message = 'آدرس نامعتبر یا غیرقابل بررسی';
+            } else {
+                for ($hop = 0; $hop <= self::REDIRECT_HOP_LIMIT; $hop++) {
+                    $normalized = strtolower(rtrim($current_url, '/'));
+                    if (isset($visited[$normalized])) {
+                        $status = 'redirect_loop';
+                        $message = 'حلقهٔ ریدایرکت شناسایی شد';
+                        $chain[] = 'LOOP ' . $current_url;
+                        break;
+                    }
+                    $visited[$normalized] = true;
+                    $response = wp_safe_remote_head($current_url, [
+                        'timeout' => 2,
+                        'redirection' => 0,
+                        'limit_response_size' => 1024,
+                        'reject_unsafe_urls' => true,
+                    ]);
+                    if (!is_wp_error($response) && in_array((int) wp_remote_retrieve_response_code($response), [405, 501], true)) {
+                        $response = wp_safe_remote_get($current_url, [
+                            'timeout' => 2,
+                            'redirection' => 0,
+                            'limit_response_size' => 1024,
+                            'headers' => ['Range' => 'bytes=0-0'],
+                            'reject_unsafe_urls' => true,
+                        ]);
+                    }
+                    if (is_wp_error($response)) {
+                        $status = 'unknown';
+                        $message = 'خطای اتصال؛ نتیجه قطعی نیست';
+                        $chain[] = 'ERROR ' . $current_url;
+                        break;
+                    }
+
+                    $code = (int) wp_remote_retrieve_response_code($response);
+                    $codes[] = $code;
+                    $chain[] = $code . ' ' . $current_url;
+                    if (in_array($code, [301, 302, 303, 307, 308], true)) {
+                        $location = (string) wp_remote_retrieve_header($response, 'location');
+                        if ($location === '') {
+                            $status = 'unknown';
+                            $message = 'پاسخ ریدایرکت بدون Location';
+                            break;
+                        }
+                        if ($hop >= self::REDIRECT_HOP_LIMIT) {
+                            $status = 'redirect_loop';
+                            $message = 'بیش از سقف مجاز ریدایرکت؛ بررسی متوقف شد';
+                            break;
+                        }
+                        if (class_exists('WP_Http')) {
+                            $next_url = WP_Http::make_absolute_url($location, $current_url);
+                        } else {
+                            $next_url = $location;
+                        }
+                        $next_url = esc_url_raw($next_url, ['http', 'https']);
+                        if ($next_url === '' || !wp_http_validate_url($next_url)) {
+                            $status = 'unknown';
+                            $message = 'مقصد ریدایرکت نامعتبر یا ناامن';
+                            break;
+                        }
+                        $current_url = $next_url;
+                        continue;
+                    }
+
+                    if ($code >= 400) {
+                        $status = 'broken';
+                        $message = 'خطای HTTP ' . $code;
+                    } elseif ($code >= 200 && $code < 300) {
+                        $status = count($codes) > 1 ? (count($codes) === 2 ? 'redirect' : 'redirect_chain') : 'ok';
+                        $message = count($codes) > 1 ? 'ریدایرکت به پاسخ نهایی HTTP ' . $code : 'پاسخ معتبر';
+                    } else {
+                        $status = 'unknown';
+                        $message = 'پاسخ HTTP نامعمول ' . $code;
+                    }
+                    break;
+                }
+                if (count($codes) > 1 && $status === 'redirect') $message = 'ریدایرکت (' . implode(' → ', $codes) . ')';
+                if (count($codes) > 2 && $status === 'redirect_chain') $message = 'زنجیرهٔ ریدایرکت (' . implode(' → ', $codes) . ')';
+            }
+            $wpdb->update(
+                $this->links_table,
+                [
+                    'check_status' => $status,
+                    'check_code' => $code,
+                    'check_message' => substr($message, 0, 250),
+                    'redirect_chain' => implode("\n", $chain),
+                    'checked_at' => current_time('mysql'),
+                ],
+                ['id' => (int) $row->id],
+                ['%s', '%d', '%s', '%s', '%s'],
+                ['%d']
+            );
+        }
+        $remaining = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM {$this->links_table} WHERE scan_id = %d AND check_status = %s AND url LIKE %s",
+            (int) $scan->id, 'unchecked', 'http%'
+        ));
         wp_send_json_success(['done' => $remaining === 0, 'checked' => count($rows), 'remaining' => $remaining]);
+    }
+
+    private function get_scan_history(int $current_id): array {
+        global $wpdb;
+        return $wpdb->get_results($wpdb->prepare(
+            "SELECT s.id, s.started_at, s.completed_at, s.processed_posts,
+                    (SELECT COUNT(*) FROM {$this->links_table} l WHERE l.scan_id = s.id) AS link_count
+             FROM {$this->scans_table} s WHERE s.status = %s ORDER BY s.completed_at DESC, s.id DESC LIMIT %d",
+            'complete', self::HISTORY_LIMIT
+        )) ?: [];
+    }
+
+    private function get_scan_diff(int $current_id): array {
+        global $wpdb;
+        $previous = $wpdb->get_var($wpdb->prepare(
+            "SELECT id FROM {$this->scans_table} WHERE status = %s AND id <> %d ORDER BY completed_at DESC, id DESC LIMIT 1",
+            'complete', $current_id
+        ));
+        if (!$previous) return ['previous' => 0, 'added' => 0, 'removed' => 0, 'samples' => []];
+        $previous = (int) $previous;
+        $added = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM {$this->links_table} n WHERE n.scan_id = %d AND NOT EXISTS (
+                SELECT 1 FROM {$this->links_table} o WHERE o.scan_id = %d AND o.source_post_id = n.source_post_id AND o.url = n.url AND o.anchor_text = n.anchor_text AND o.link_type = n.link_type AND o.occurrence_no = n.occurrence_no
+            )", $current_id, $previous
+        ));
+        $removed = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM {$this->links_table} o WHERE o.scan_id = %d AND NOT EXISTS (
+                SELECT 1 FROM {$this->links_table} n WHERE n.scan_id = %d AND n.source_post_id = o.source_post_id AND n.url = o.url AND n.anchor_text = o.anchor_text AND n.link_type = o.link_type AND n.occurrence_no = o.occurrence_no
+            )", $previous, $current_id
+        ));
+        $new_rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT n.source_title, n.url, n.anchor_text FROM {$this->links_table} n WHERE n.scan_id = %d AND NOT EXISTS (
+                SELECT 1 FROM {$this->links_table} o WHERE o.scan_id = %d AND o.source_post_id = n.source_post_id AND o.url = n.url AND o.anchor_text = n.anchor_text AND o.link_type = n.link_type AND o.occurrence_no = n.occurrence_no
+            ) ORDER BY n.source_post_id, n.occurrence_no LIMIT 25", $current_id, $previous
+        )) ?: [];
+        $old_rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT o.source_title, o.url, o.anchor_text FROM {$this->links_table} o WHERE o.scan_id = %d AND NOT EXISTS (
+                SELECT 1 FROM {$this->links_table} n WHERE n.scan_id = %d AND n.source_post_id = o.source_post_id AND n.url = o.url AND n.anchor_text = o.anchor_text AND n.link_type = o.link_type AND n.occurrence_no = o.occurrence_no
+            ) ORDER BY o.source_post_id, o.occurrence_no LIMIT %d", $previous, $current_id, max(0, 25 - count($new_rows))
+        )) ?: [];
+        $samples = [];
+        foreach ($new_rows as $row) $samples[] = ['change' => 'جدید در اسکن فعلی', 'source_title' => (string) $row->source_title, 'url' => (string) $row->url, 'anchor' => (string) $row->anchor_text];
+        foreach ($old_rows as $row) $samples[] = ['change' => 'حذف‌شده/رفع‌شده نسبت به اسکن قبلی', 'source_title' => (string) $row->source_title, 'url' => (string) $row->url, 'anchor' => (string) $row->anchor_text];
+        return ['previous' => $previous, 'added' => $added, 'removed' => $removed, 'samples' => $samples];
     }
 
     private function get_sources_without_internal(int $scan_id): array {
@@ -549,28 +741,28 @@ final class Senoobar_Link_Auditor {
         )) ?: [];
     }
 
-    private function count_links(int $scan_id, string $type, string $source_type, string $search): int {
+    private function count_links(int $scan_id, string $type, string $source_type, string $search, string $check_status = 'all'): int {
         global $wpdb;
-        [$where, $params] = $this->filter_sql($scan_id, $type, $source_type, $search);
+        [$where, $params] = $this->filter_sql($scan_id, $type, $source_type, $search, $check_status);
         return (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$this->links_table} WHERE {$where}", ...$params));
     }
 
-    private function get_links(int $scan_id, int $page, string $type, string $source_type, string $search, int $limit = self::PAGE_SIZE): array {
+    private function get_links(int $scan_id, int $page, string $type, string $source_type, string $search, int $limit = self::PAGE_SIZE, string $check_status = 'all'): array {
         global $wpdb;
-        [$where, $params] = $this->filter_sql($scan_id, $type, $source_type, $search);
+        [$where, $params] = $this->filter_sql($scan_id, $type, $source_type, $search, $check_status);
         $limit = max(1, min(100000, $limit));
         $offset = $limit === 100000 ? 0 : (max(1, $page) - 1) * $limit;
         $params[] = $limit;
         $params[] = $offset;
         return $wpdb->get_results($wpdb->prepare(
-            "SELECT id, source_post_id, source_title, source_type, url, anchor_text, link_type
+            "SELECT id, source_post_id, source_title, source_type, url, anchor_text, link_type, check_status, check_code, check_message
              FROM {$this->links_table} WHERE {$where}
              ORDER BY source_post_id ASC, occurrence_no ASC LIMIT %d OFFSET %d",
             ...$params
         )) ?: [];
     }
 
-    private function filter_sql(int $scan_id, string $type, string $source_type, string $search): array {
+    private function filter_sql(int $scan_id, string $type, string $source_type, string $search, string $check_status = 'all'): array {
         global $wpdb;
         $where = 'scan_id = %d';
         $params = [$scan_id];
@@ -581,6 +773,10 @@ final class Senoobar_Link_Auditor {
         if (in_array($source_type, ['post', 'page', 'product'], true)) {
             $where .= ' AND source_type = %s';
             $params[] = $source_type;
+        }
+        if (in_array($check_status, ['unchecked', 'ok', 'redirect', 'redirect_chain', 'redirect_loop', 'broken', 'unknown'], true)) {
+            $where .= ' AND check_status = %s';
+            $params[] = $check_status;
         }
         if ($search !== '') {
             $like = '%' . $wpdb->esc_like($search) . '%';
