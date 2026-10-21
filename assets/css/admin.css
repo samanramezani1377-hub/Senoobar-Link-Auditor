@@ -20,3 +20,6 @@
  .sla-filters label, .sla-filters input[type=search] { width:100%; }
  .sla-url { max-width:220px; }
 }
+.sla-copy-report { margin-inline-start: 8px; }
+#sla-incoming, #sla-no-incoming, #sla-broken-links { margin: 12px 0 24px; }
+#sla-incoming td, #sla-no-incoming td, #sla-broken-links td { vertical-align: top; }
