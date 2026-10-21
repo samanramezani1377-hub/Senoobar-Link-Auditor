@@ -35,6 +35,7 @@ final class Senoobar_Link_Auditor {
         register_activation_hook(SLA_FILE, [$this, 'activate']);
         add_action('admin_menu', [$this, 'admin_menu']);
         add_action('rest_api_init', [$this, 'register_rest_routes']);
+        add_action('wp_abilities_api_categories_init', [$this, 'register_ability_categories']);
         add_action('wp_abilities_api_init', [$this, 'register_agent_abilities']);
         add_action('admin_enqueue_scripts', [$this, 'enqueue_admin_assets']);
         add_action('wp_ajax_sla_start_scan', [$this, 'ajax_start_scan']);
@@ -138,6 +139,23 @@ final class Senoobar_Link_Auditor {
         ]);
     }
 
+    /** Register a dedicated category before registering this plugin's abilities. */
+    public function register_ability_categories(): void {
+        if (!function_exists('wp_register_ability_category')) {
+            return;
+        }
+
+        // Avoid duplicate-registration notices if another component already registered it.
+        if (function_exists('wp_get_ability_category') && wp_get_ability_category('senoobar-link-auditor')) {
+            return;
+        }
+
+        wp_register_ability_category('senoobar-link-auditor', [
+            'label' => 'ابزارهای سئو صنوبر',
+            'description' => 'قابلیت‌های گزارش‌گیری و اسکن دستی لینک‌های سایت صنوبر.',
+        ]);
+    }
+
     /**
      * Register native WordPress Abilities API tools when that API is available.
      * This lets connected WordPress agents discover and invoke the scanner directly.
@@ -150,7 +168,7 @@ final class Senoobar_Link_Auditor {
         wp_register_ability('senoobar-link-auditor/get-report', [
             'label' => 'دریافت گزارش لینک‌های صنوبر',
             'description' => 'خواندن گزارش آخرین اسکن موفق لینک‌های داخلی و خارجی، شامل آمار، لنگرهای خالی و محتواهای بدون لینک داخلی. فقط خواندنی است.',
-            'category' => 'content',
+            'category' => 'senoobar-link-auditor',
             'input_schema' => [
                 'type' => 'object',
                 'properties' => [
@@ -165,12 +183,19 @@ final class Senoobar_Link_Auditor {
             'output_schema' => ['type' => 'object', 'properties' => ['available' => ['type' => 'boolean'], 'links' => ['type' => 'array']], 'additionalProperties' => true],
             'execute_callback' => [$this, 'ability_get_report'],
             'permission_callback' => [$this, 'rest_admin_permission'],
+            'meta' => [
+                // Explicitly opt into REST and MCP discovery; execution remains admin-only.
+                'public' => false,
+                'show_in_rest' => true,
+                'mcp' => ['public' => true],
+                'annotations' => ['readonly' => true, 'destructive' => false, 'idempotent' => true],
+            ],
         ]);
 
         wp_register_ability('senoobar-link-auditor/scan-links', [
             'label' => 'اسکن دستی لینک‌های صنوبر',
             'description' => 'به‌صورت صریح اسکن را شروع می‌کند یا یک دسته از اسکن فعال را ادامه می‌دهد. برای شروع action=start و برای ادامه action=continue همراه scan_id را بفرستید. هیچ محتوایی تغییر نمی‌کند.',
-            'category' => 'content',
+            'category' => 'senoobar-link-auditor',
             'input_schema' => [
                 'type' => 'object',
                 'properties' => [
@@ -183,6 +208,13 @@ final class Senoobar_Link_Auditor {
             'output_schema' => ['type' => 'object', 'additionalProperties' => true],
             'execute_callback' => [$this, 'ability_scan_links'],
             'permission_callback' => [$this, 'rest_admin_permission'],
+            'meta' => [
+                // Discovery is allowed, but only users with manage_options may execute it.
+                'public' => false,
+                'show_in_rest' => true,
+                'mcp' => ['public' => true],
+                'annotations' => ['readonly' => false, 'destructive' => false, 'idempotent' => false],
+            ],
         ]);
     }
 
