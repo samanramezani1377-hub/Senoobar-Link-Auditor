@@ -35,4 +35,9 @@ sla_safety_assert(str_contains($js, "await request('sla_check_broken_batch'"), '
 sla_safety_assert(str_contains($js, "navigator.clipboard.writeText"), 'each report supports clipboard copy');
 sla_safety_assert(!preg_match('/setInterval\\s*\\(|setTimeout\\s*\\(/', $js), 'no background polling or timer is used');
 sla_safety_assert(str_contains($readme, 'No agent abilities or custom agent REST endpoints'), 'documentation confirms agent integrations are removed');
-echo "Safety checks passed.\n";
+sla_safety_assert(str_contains($main, 'final_code smallint(5) unsigned') && str_contains($main, 'final_url text NULL'), 'initial and final HTTP response details are persisted');
+sla_safety_assert(str_contains($main, "'redirect_limit'") && str_contains($main, 'REDIRECT_HOP_LIMIT'), 'redirect-limit results are distinct from confirmed loops');
+sla_safety_assert(str_contains($main, 'sla-redirect-links') && str_contains($main, 'Redirect chain'), 'redirect details are visible in admin reports and CSV');
+sla_safety_assert(str_contains($main, 'FROM {$this->scans_table} WHERE id = %d AND status = %s'), 'CSV export can select retained completed snapshots');
+sla_safety_assert(str_contains($main, 'pending_current') && str_contains($main, 'pending_previous'), 'HTTP comparison waits for both snapshots to finish checking');
+echo "Safety checks passed (29 assertions).\n";
