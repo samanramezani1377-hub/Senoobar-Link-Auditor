@@ -752,21 +752,23 @@ final class Senoobar_Link_Auditor {
                 SELECT 1 FROM {$this->links_table} n WHERE n.scan_id = %d AND n.source_post_id = o.source_post_id AND n.url = o.url AND n.anchor_text = o.anchor_text AND n.link_type = o.link_type AND n.occurrence_no = o.occurrence_no
             )", $previous, $current_id
         ));
-        $comparable_current = (int) $wpdb->get_var($wpdb->prepare(
-            "SELECT COUNT(*) FROM {$this->links_table} WHERE scan_id = %d AND check_status <> %s", $current_id, 'unchecked'
+        $pending_current = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM {$this->links_table} WHERE scan_id = %d AND check_status = %s AND url LIKE %s", $current_id, 'unchecked', 'http%'
         ));
-        $comparable_previous = (int) $wpdb->get_var($wpdb->prepare(
-            "SELECT COUNT(*) FROM {$this->links_table} WHERE scan_id = %d AND check_status <> %s", $previous, 'unchecked'
+        $pending_previous = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM {$this->links_table} WHERE scan_id = %d AND check_status = %s AND url LIKE %s", $previous, 'unchecked', 'http%'
         ));
+        $comparable_current = $pending_current === 0;
+        $comparable_previous = $pending_previous === 0;
         $new_problems = 0;
         $resolved_problems = 0;
-        if ($comparable_current > 0 && $comparable_previous > 0) {
+        if ($comparable_current && $comparable_previous) {
             $new_problems = (int) $wpdb->get_var($wpdb->prepare(
                 "SELECT COUNT(*) FROM {$this->links_table} n
                  INNER JOIN {$this->links_table} o ON o.scan_id = %d AND o.source_post_id = n.source_post_id
                     AND o.url = n.url AND o.anchor_text = n.anchor_text AND o.link_type = n.link_type AND o.occurrence_no = n.occurrence_no
-                 WHERE n.scan_id = %d AND n.check_status IN ('broken','redirect','redirect_chain','redirect_loop')
-                   AND o.check_status NOT IN ('broken','redirect','redirect_chain','redirect_loop','unchecked')",
+                 WHERE n.scan_id = %d AND n.check_status IN ('broken','redirect','redirect_chain','redirect_loop','redirect_limit')
+                   AND o.check_status NOT IN ('broken','redirect','redirect_chain','redirect_loop','redirect_limit','unchecked')",
                 $previous, $current_id
             ));
             $resolved_problems = (int) $wpdb->get_var($wpdb->prepare(
@@ -791,7 +793,7 @@ final class Senoobar_Link_Auditor {
         $samples = [];
         foreach ($new_rows as $row) $samples[] = ['change' => 'جدید در اسکن فعلی', 'source_title' => (string) $row->source_title, 'url' => (string) $row->url, 'anchor' => (string) $row->anchor_text];
         foreach ($old_rows as $row) $samples[] = ['change' => 'حذف‌شده/رفع‌شده نسبت به اسکن قبلی', 'source_title' => (string) $row->source_title, 'url' => (string) $row->url, 'anchor' => (string) $row->anchor_text];
-        return ['previous' => $previous, 'added' => $added, 'removed' => $removed, 'new_problems' => $new_problems, 'resolved_problems' => $resolved_problems, 'http_comparable' => ($comparable_current > 0 && $comparable_previous > 0), 'samples' => $samples];
+        return ['previous' => $previous, 'added' => $added, 'removed' => $removed, 'new_problems' => $new_problems, 'resolved_problems' => $resolved_problems, 'http_comparable' => ($comparable_current && $comparable_previous), 'samples' => $samples];
     }
 
     private function get_sources_without_internal(int $scan_id): array {
