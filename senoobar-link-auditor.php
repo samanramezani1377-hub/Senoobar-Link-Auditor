@@ -34,6 +34,7 @@ final class Senoobar_Link_Auditor {
 
         register_activation_hook(SLA_FILE, [$this, 'activate']);
         add_action('admin_menu', [$this, 'admin_menu']);
+        add_action('rest_api_init', [$this, 'register_rest_routes']);
         add_action('admin_enqueue_scripts', [$this, 'enqueue_admin_assets']);
         add_action('wp_ajax_sla_start_scan', [$this, 'ajax_start_scan']);
         add_action('wp_ajax_sla_scan_batch', [$this, 'ajax_scan_batch']);
@@ -93,6 +94,301 @@ final class Senoobar_Link_Auditor {
             KEY scan_internal (scan_id,internal_count),
             KEY scan_type (scan_id,source_type)
         ) ENGINE=InnoDB {$charset};");
+    }
+
+    /**
+     * Read-only/report and explicitly-triggered scan endpoints for authorized agents.
+     * All routes require an authenticated WordPress administrator (manage_options).
+     */
+    public function register_rest_routes(): void {
+        register_rest_route('sla/v1', '/status', [
+            'methods' => WP_REST_Server::READABLE,
+            'callback' => [$this, 'rest_status'],
+            'permission_callback' => [$this, 'rest_admin_permission'],
+        ]);
+        register_rest_route('sla/v1', '/report', [
+            'methods' => WP_REST_Server::READABLE,
+            'callback' => [$this, 'rest_report'],
+            'permission_callback' => [$this, 'rest_admin_permission'],
+            'args' => [
+                'page' => ['default' => 1, 'sanitize_callback' => 'absint'],
+                'per_page' => ['default' => 50, 'sanitize_callback' => 'absint'],
+                'link_type' => ['default' => 'all', 'sanitize_callback' => 'sanitize_key'],
+                'source_type' => ['default' => 'all', 'sanitize_callback' => 'sanitize_key'],
+                'search' => ['default' => '', 'sanitize_callback' => 'sanitize_text_field'],
+            ],
+        ]);
+        register_rest_route('sla/v1', '/scans', [
+            'methods' => WP_REST_Server::CREATABLE,
+            'callback' => [$this, 'rest_start_scan'],
+            'permission_callback' => [$this, 'rest_admin_permission'],
+        ]);
+        register_rest_route('sla/v1', '/scans/(?P<id>\d+)/continue', [
+            'methods' => WP_REST_Server::CREATABLE,
+            'callback' => [$this, 'rest_continue_scan'],
+            'permission_callback' => [$this, 'rest_admin_permission'],
+            'args' => ['id' => ['required' => true, 'sanitize_callback' => 'absint']],
+        ]);
+        register_rest_route('sla/v1', '/scans/(?P<id>\d+)', [
+            'methods' => WP_REST_Server::READABLE,
+            'callback' => [$this, 'rest_scan_status'],
+            'permission_callback' => [$this, 'rest_admin_permission'],
+            'args' => ['id' => ['required' => true, 'sanitize_callback' => 'absint']],
+        ]);
+    }
+
+    public function rest_admin_permission(): bool {
+        return current_user_can('manage_options');
+    }
+
+    public function rest_status(WP_REST_Request $request): WP_REST_Response {
+        global $wpdb;
+        $current = $this->current_scan();
+        $running = $wpdb->get_row($wpdb->prepare(
+            "SELECT id, status, started_at, total_posts, processed_posts FROM {$this->scans_table} WHERE status = %s ORDER BY id DESC LIMIT 1",
+            'running'
+        ));
+        return rest_ensure_response([
+            'plugin' => 'Senoobar Link Auditor',
+            'version' => SLA_VERSION,
+            'scan_available' => true,
+            'current_report' => $current ? [
+                'scan_id' => (int) $current->id,
+                'completed_at' => $current->completed_at,
+                'counts' => $this->report_counts((int) $current->id),
+            ] : null,
+            'running_scan' => $running ? [
+                'scan_id' => (int) $running->id,
+                'status' => $running->status,
+                'started_at' => $running->started_at,
+                'total_posts' => (int) $running->total_posts,
+                'processed_posts' => (int) $running->processed_posts,
+            ] : null,
+            'scan_instructions' => [
+                'start' => 'POST /wp-json/sla/v1/scans',
+                'continue' => 'POST /wp-json/sla/v1/scans/{id}/continue',
+                'report' => 'GET /wp-json/sla/v1/report',
+            ],
+        ]);
+    }
+
+    public function rest_report(WP_REST_Request $request): WP_REST_Response {
+        $scan = $this->current_scan();
+        if (!$scan) {
+            return new WP_REST_Response([
+                'available' => false,
+                'message' => 'هنوز گزارش موفقی ثبت نشده است. برای شروع، یک اسکن صریح ایجاد کنید.',
+                'links' => [],
+            ], 200);
+        }
+
+        $page = max(1, (int) $request->get_param('page'));
+        $per_page = max(1, min(100, (int) $request->get_param('per_page')));
+        $type = sanitize_key((string) $request->get_param('link_type'));
+        $source_type = sanitize_key((string) $request->get_param('source_type'));
+        $search = sanitize_text_field((string) $request->get_param('search'));
+        $total = $this->count_links((int) $scan->id, $type, $source_type, $search);
+        $rows = $this->get_links((int) $scan->id, $page, $type, $source_type, $search, $per_page);
+        $links = array_map(static function ($row): array {
+            return [
+                'source_id' => (int) $row->source_post_id,
+                'source_title' => (string) $row->source_title,
+                'source_type' => (string) $row->source_type,
+                'source_edit_url' => get_edit_post_link((int) $row->source_post_id, 'raw') ?: '',
+                'anchor_text' => (string) $row->anchor_text,
+                'url' => (string) $row->url,
+                'link_type' => (string) $row->link_type,
+                'empty_anchor' => (string) $row->anchor_text === '',
+            ];
+        }, $rows);
+
+        return rest_ensure_response([
+            'available' => true,
+            'scan_id' => (int) $scan->id,
+            'completed_at' => $scan->completed_at,
+            'counts' => $this->report_counts((int) $scan->id),
+            'filters' => [
+                'link_type' => in_array($type, ['internal', 'external'], true) ? $type : 'all',
+                'source_type' => in_array($source_type, ['post', 'page', 'product'], true) ? $source_type : 'all',
+                'search' => $search,
+            ],
+            'pagination' => [
+                'page' => $page,
+                'per_page' => $per_page,
+                'total' => $total,
+                'total_pages' => (int) ceil($total / $per_page),
+            ],
+            'links' => $links,
+            'without_internal_links' => $this->get_sources_without_internal((int) $scan->id),
+            'scope_notice' => 'گزارش فقط محتوای ذخیره‌شدهٔ نوشته‌ها، برگه‌ها و محصولات منتشرشده را بررسی می‌کند؛ مقصد لینک‌ها را از طریق اینترنت درخواست نمی‌کند و هیچ محتوایی را تغییر نمی‌دهد.',
+        ]);
+    }
+
+    public function rest_start_scan(WP_REST_Request $request): WP_REST_Response {
+        global $wpdb;
+        $wpdb->query($wpdb->prepare(
+            "UPDATE {$this->scans_table} SET status = %s WHERE status = %s AND started_at < DATE_SUB(%s, INTERVAL 2 HOUR)",
+            'abandoned',
+            'running',
+            current_time('mysql')
+        ));
+        $running = $wpdb->get_var($wpdb->prepare(
+            "SELECT id FROM {$this->scans_table} WHERE status = %s LIMIT 1",
+            'running'
+        ));
+        if ($running) {
+            return new WP_REST_Response(['code' => 'sla_scan_running', 'message' => 'یک اسکن دیگر فعال است.', 'scan_id' => (int) $running], 409);
+        }
+
+        $total = (int) $wpdb->get_var("SELECT COUNT(ID) FROM {$wpdb->posts} WHERE post_status = 'publish' AND post_type IN ('post','page','product')");
+        $inserted = $wpdb->insert($this->scans_table, [
+            'token_hash' => hash('sha256', wp_generate_password(64, false, false)),
+            'status' => 'running',
+            'is_current' => 0,
+            'started_at' => current_time('mysql'),
+            'last_post_id' => 0,
+            'total_posts' => $total,
+            'processed_posts' => 0,
+        ], ['%s','%s','%d','%s','%d','%d','%d']);
+        if (!$inserted) {
+            return new WP_REST_Response(['code' => 'sla_scan_create_failed', 'message' => 'ذخیرهٔ وضعیت اسکن ممکن نشد.'], 500);
+        }
+
+        return new WP_REST_Response([
+            'scan_id' => (int) $wpdb->insert_id,
+            'status' => 'running',
+            'total_posts' => $total,
+            'processed_posts' => 0,
+            'next_action' => 'POST /wp-json/sla/v1/scans/' . (int) $wpdb->insert_id . '/continue',
+            'note' => 'اسکن به‌صورت صریح درخواست شده است. برای ادامه، مسیر continue را تا رسیدن status به complete فراخوانی کنید.',
+        ], 201);
+    }
+
+    public function rest_scan_status(WP_REST_Request $request): WP_REST_Response {
+        global $wpdb;
+        $id = (int) $request['id'];
+        $scan = $wpdb->get_row($wpdb->prepare(
+            "SELECT id, status, started_at, completed_at, total_posts, processed_posts, error_message FROM {$this->scans_table} WHERE id = %d",
+            $id
+        ));
+        if (!$scan) {
+            return new WP_REST_Response(['code' => 'sla_scan_not_found', 'message' => 'اسکن پیدا نشد.'], 404);
+        }
+        return rest_ensure_response([
+            'scan_id' => (int) $scan->id,
+            'status' => (string) $scan->status,
+            'started_at' => $scan->started_at,
+            'completed_at' => $scan->completed_at,
+            'total_posts' => (int) $scan->total_posts,
+            'processed_posts' => (int) $scan->processed_posts,
+            'percent' => (int) min(100, floor(((int) $scan->processed_posts / max(1, (int) $scan->total_posts)) * 100)),
+            'error' => $scan->error_message ?: null,
+        ]);
+    }
+
+    public function rest_continue_scan(WP_REST_Request $request): WP_REST_Response {
+        global $wpdb;
+        require_once SLA_DIR . 'includes/class-sla-parser.php';
+        $scan_id = (int) $request['id'];
+        $scan = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$this->scans_table} WHERE id = %d", $scan_id));
+        if (!$scan || $scan->status !== 'running' || (int) $scan->is_current === 1) {
+            return new WP_REST_Response(['code' => 'sla_scan_not_running', 'message' => 'اسکن در حال اجرا پیدا نشد.'], 409);
+        }
+
+        $wpdb->query('START TRANSACTION');
+        try {
+            $posts = $wpdb->get_results($wpdb->prepare(
+                "SELECT ID, post_title, post_type, post_content FROM {$wpdb->posts}
+                 WHERE post_status = 'publish' AND post_type IN ('post','page','product') AND ID > %d
+                 ORDER BY ID ASC LIMIT %d",
+                (int) $scan->last_post_id,
+                self::BATCH_SIZE
+            ));
+
+            if (!$posts) {
+                $updated = $wpdb->update($this->scans_table, [
+                    'status' => 'complete',
+                    'is_current' => 1,
+                    'completed_at' => current_time('mysql'),
+                ], ['id' => $scan_id, 'status' => 'running'], ['%s','%d','%s'], ['%d','%s']);
+                if ($updated === false) {
+                    throw new RuntimeException('scan finalization failed');
+                }
+                $wpdb->query($wpdb->prepare("UPDATE {$this->scans_table} SET is_current = 0 WHERE id <> %d AND is_current = 1", $scan_id));
+                $wpdb->query($wpdb->prepare("DELETE FROM {$this->links_table} WHERE scan_id <> %d", $scan_id));
+                $wpdb->query($wpdb->prepare("DELETE FROM {$this->sources_table} WHERE scan_id <> %d", $scan_id));
+                $wpdb->query($wpdb->prepare("DELETE FROM {$this->scans_table} WHERE id <> %d AND status <> %s", $scan_id, 'running'));
+                $wpdb->query('COMMIT');
+                return rest_ensure_response([
+                    'scan_id' => $scan_id,
+                    'status' => 'complete',
+                    'processed_posts' => (int) $scan->processed_posts,
+                    'total_posts' => (int) $scan->total_posts,
+                    'counts' => $this->report_counts($scan_id),
+                ]);
+            }
+
+            $last_id = (int) $scan->last_post_id;
+            $processed = (int) $scan->processed_posts;
+            foreach ($posts as $post) {
+                $last_id = (int) $post->ID;
+                $occurrence = 0;
+                $links = SLA_Parser::extract_links((string) $post->post_content, home_url('/'), get_permalink((int) $post->ID) ?: home_url('/'));
+                $internal_count = count(array_filter($links, static fn(array $link): bool => $link['type'] === 'internal'));
+                if ($wpdb->insert($this->sources_table, [
+                    'scan_id' => $scan_id,
+                    'source_post_id' => (int) $post->ID,
+                    'source_title' => (string) $post->post_title,
+                    'source_type' => (string) $post->post_type,
+                    'link_count' => count($links),
+                    'internal_count' => $internal_count,
+                ], ['%d','%d','%s','%s','%d','%d']) === false) {
+                    throw new RuntimeException('source row insert failed');
+                }
+                foreach ($links as $link) {
+                    if ($wpdb->insert($this->links_table, [
+                        'scan_id' => $scan_id,
+                        'source_post_id' => (int) $post->ID,
+                        'source_title' => (string) $post->post_title,
+                        'source_type' => (string) $post->post_type,
+                        'url' => $link['url'],
+                        'anchor_text' => $link['anchor'],
+                        'link_type' => $link['type'],
+                        'occurrence_no' => $occurrence++,
+                    ], ['%d','%d','%s','%s','%s','%s','%s','%d']) === false) {
+                        throw new RuntimeException('link row insert failed');
+                    }
+                }
+                $processed++;
+            }
+
+            $updated = $wpdb->update($this->scans_table, [
+                'last_post_id' => $last_id,
+                'processed_posts' => $processed,
+            ], ['id' => $scan_id, 'status' => 'running'], ['%d','%d'], ['%d','%s']);
+            if ($updated === false) {
+                throw new RuntimeException('scan progress update failed');
+            }
+            $wpdb->query('COMMIT');
+            return rest_ensure_response([
+                'scan_id' => $scan_id,
+                'status' => 'running',
+                'processed_posts' => $processed,
+                'total_posts' => (int) $scan->total_posts,
+                'percent' => (int) min(99, floor(($processed / max(1, (int) $scan->total_posts)) * 100)),
+                'next_action' => 'POST /wp-json/sla/v1/scans/' . $scan_id . '/continue',
+            ]);
+        } catch (Throwable $e) {
+            $wpdb->query('ROLLBACK');
+            $wpdb->update($this->scans_table, [
+                'status' => 'failed',
+                'error_message' => 'خطا هنگام ذخیره‌سازی نتایج.',
+            ], ['id' => $scan_id], ['%s','%s'], ['%d']);
+            return new WP_REST_Response([
+                'code' => 'sla_scan_batch_failed',
+                'message' => 'اسکن کامل نشد؛ گزارش موفق قبلی حفظ شده است.',
+            ], 500);
+        }
     }
 
     public function admin_menu(): void {
