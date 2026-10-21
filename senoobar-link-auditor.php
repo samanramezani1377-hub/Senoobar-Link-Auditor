@@ -19,18 +19,18 @@ define('SLA_FILE', __FILE__);
 define('SLA_DIR', plugin_dir_path(__FILE__));
 define('SLA_URL', plugin_dir_url(__FILE__));
 
-require_once SLA_DIR . 'includes/class-sla-parser.php';
-
 final class Senoobar_Link_Auditor {
     private const BATCH_SIZE = 20;
     private const PAGE_SIZE = 50;
     private string $scans_table;
     private string $links_table;
+    private string $sources_table;
 
     public function __construct() {
         global $wpdb;
         $this->scans_table = $wpdb->prefix . 'sla_scans';
         $this->links_table = $wpdb->prefix . 'sla_links';
+        $this->sources_table = $wpdb->prefix . 'sla_sources';
 
         register_activation_hook(SLA_FILE, [$this, 'activate']);
         add_action('admin_menu', [$this, 'admin_menu']);
@@ -47,6 +47,7 @@ final class Senoobar_Link_Auditor {
         $charset = $wpdb->get_charset_collate();
         $scans = $this->scans_table;
         $links = $this->links_table;
+        $sources = $this->sources_table;
 
         dbDelta("CREATE TABLE {$scans} (
             id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
@@ -79,6 +80,18 @@ final class Senoobar_Link_Auditor {
             KEY scan_type (scan_id,link_type),
             KEY source_post (source_post_id),
             KEY scan_source_type (scan_id,source_type)
+        ) {$charset};");
+
+        dbDelta("CREATE TABLE {$sources} (
+            scan_id bigint(20) unsigned NOT NULL,
+            source_post_id bigint(20) unsigned NOT NULL,
+            source_title text NOT NULL,
+            source_type varchar(20) NOT NULL,
+            link_count int(10) unsigned NOT NULL DEFAULT 0,
+            internal_count int(10) unsigned NOT NULL DEFAULT 0,
+            PRIMARY KEY  (scan_id,source_post_id),
+            KEY scan_internal (scan_id,internal_count),
+            KEY scan_type (scan_id,source_type)
         ) {$charset};");
     }
 
@@ -119,7 +132,7 @@ final class Senoobar_Link_Auditor {
         }
 
         $current = $this->current_scan();
-        $counts = $current ? $this->report_counts((int) $current->id) : ['total' => 0, 'internal' => 0, 'external' => 0, 'empty' => 0];
+        $counts = $current ? $this->report_counts((int) $current->id) : ['total' => 0, 'internal' => 0, 'external' => 0, 'empty' => 0, 'duplicates' => 0, 'without_internal' => 0];
         $page = max(1, absint($_GET['paged'] ?? 1));
         $type = sanitize_key($_GET['link_type'] ?? 'all');
         $source_type = sanitize_key($_GET['source_type'] ?? 'all');
@@ -143,6 +156,8 @@ final class Senoobar_Link_Auditor {
                 <div><strong><?php echo esc_html((string) $counts['internal']); ?></strong><span>لینک داخلی</span></div>
                 <div><strong><?php echo esc_html((string) $counts['external']); ?></strong><span>لینک خارجی</span></div>
                 <div><strong><?php echo esc_html((string) $counts['empty']); ?></strong><span>لنگر خالی</span></div>
+                <div><strong><?php echo esc_html((string) $counts['duplicates']); ?></strong><span>گروه لینک تکراری</span></div>
+                <div><strong><?php echo esc_html((string) $counts['without_internal']); ?></strong><span>محتوای بدون لینک داخلی</span></div>
             </div>
 
             <?php if (!$current): ?>
@@ -196,6 +211,17 @@ final class Senoobar_Link_Auditor {
                     </div></div>
                 <?php endif; ?>
             <?php endif; ?>
+            <?php if ($current): $no_internal_sources = $this->get_sources_without_internal((int) $current->id); ?>
+                <h2>محتواهای بدون لینک داخلی (حداکثر 100 مورد)</h2>
+                <table class="widefat striped"><thead><tr><th>عنوان محتوا</th><th>نوع</th><th>تعداد لینک‌ها</th></tr></thead><tbody>
+                <?php if (!$no_internal_sources): ?><tr><td colspan="3">همهٔ محتواها حداقل یک لینک داخلی دارند.</td></tr>
+                <?php else: foreach ($no_internal_sources as $source): ?><tr>
+                    <td><a href="<?php echo esc_url(get_edit_post_link((int) $source->source_post_id) ?: ''); ?>"><?php echo esc_html($source->source_title ?: '(بدون عنوان)'); ?></a></td>
+                    <td><?php echo esc_html($this->source_type_label((string) $source->source_type)); ?></td>
+                    <td><?php echo esc_html((string) $source->link_count); ?></td>
+                </tr><?php endforeach; endif; ?>
+                </tbody></table>
+            <?php endif; ?>
             <p class="description">فهرست نشان‌دهندهٔ لینک‌های موجود در آخرین بررسی موفق است. لینک‌های تکراری عمداً جداگانه نگه داشته می‌شوند تا محل هر استفاده قابل شناسایی باشد.</p>
         </div>
         <?php
@@ -230,6 +256,7 @@ final class Senoobar_Link_Auditor {
 
     public function ajax_scan_batch(): void {
         $this->verify_ajax_request();
+        require_once SLA_DIR . 'includes/class-sla-parser.php';
         global $wpdb;
 
         $scan_id = absint($_POST['scanId'] ?? 0);
@@ -257,6 +284,7 @@ final class Senoobar_Link_Auditor {
                 ], ['id' => $scan_id, 'status' => 'running'], ['%s','%d','%s'], ['%d','%s']);
                 $wpdb->query($wpdb->prepare("UPDATE {$this->scans_table} SET is_current = 0 WHERE id <> %d AND is_current = 1", $scan_id));
                 $wpdb->query($wpdb->prepare("DELETE FROM {$this->links_table} WHERE scan_id <> %d", $scan_id));
+                $wpdb->query($wpdb->prepare("DELETE FROM {$this->sources_table} WHERE scan_id <> %d", $scan_id));
                 $wpdb->query($wpdb->prepare("DELETE FROM {$this->scans_table} WHERE id <> %d AND status <> %s", $scan_id, 'running'));
                 $wpdb->query('COMMIT');
                 wp_send_json_success(['done' => true, 'processed' => (int) $scan->processed_posts, 'total' => (int) $scan->total_posts, 'percent' => 100]);
@@ -268,6 +296,18 @@ final class Senoobar_Link_Auditor {
                 $last_id = (int) $post->ID;
                 $occurrence = 0;
                 $links = SLA_Parser::extract_links((string) $post->post_content, home_url('/'));
+                $internal_count = count(array_filter($links, static fn(array $link): bool => $link['type'] === 'internal'));
+                $source_saved = $wpdb->insert($this->sources_table, [
+                    'scan_id' => $scan_id,
+                    'source_post_id' => (int) $post->ID,
+                    'source_title' => (string) $post->post_title,
+                    'source_type' => (string) $post->post_type,
+                    'link_count' => count($links),
+                    'internal_count' => $internal_count,
+                ], ['%d','%d','%s','%s','%d','%d']);
+                if ($source_saved === false) {
+                    throw new RuntimeException('source row insert failed');
+                }
                 foreach ($links as $link) {
                     $ok = $wpdb->insert($this->links_table, [
                         'scan_id' => $scan_id,
@@ -311,6 +351,7 @@ final class Senoobar_Link_Auditor {
         }
         $wpdb->query('START TRANSACTION');
         $wpdb->delete($this->links_table, ['scan_id' => $scan_id], ['%d']);
+        $wpdb->delete($this->sources_table, ['scan_id' => $scan_id], ['%d']);
         $wpdb->delete($this->scans_table, ['id' => $scan_id, 'status' => 'running'], ['%d','%s']);
         $wpdb->query('COMMIT');
         wp_send_json_success(['cancelled' => true]);
@@ -329,24 +370,27 @@ final class Senoobar_Link_Auditor {
         $type = sanitize_key($_GET['link_type'] ?? 'all');
         $source_type = sanitize_key($_GET['source_type'] ?? 'all');
         $search = sanitize_text_field(wp_unslash($_GET['s'] ?? ''));
-        $rows = $this->get_links($scan_id, 1, $type, $source_type, $search, 100000);
-
         nocache_headers();
         header('Content-Type: text/csv; charset=UTF-8');
         header('Content-Disposition: attachment; filename="senoobar-link-auditor.csv"');
         $out = fopen('php://output', 'w');
         fwrite($out, "\xEF\xBB\xBF");
         fputcsv($out, ['Source ID', 'Source title', 'Source type', 'Anchor text', 'Destination URL', 'Link type']);
-        foreach ($rows as $row) {
-            fputcsv($out, [
+        $page = 1;
+        do {
+            $rows = $this->get_links($scan_id, $page, $type, $source_type, $search, 1000);
+            foreach ($rows as $row) {
+                fputcsv($out, [
                 (int) $row->source_post_id,
                 $this->csv_safe((string) $row->source_title),
                 $this->csv_safe($this->source_type_label((string) $row->source_type)),
                 $this->csv_safe((string) $row->anchor_text),
                 $this->csv_safe((string) $row->url),
-                $row->link_type,
-            ]);
-        }
+                    $row->link_type,
+                ]);
+            }
+            $page++;
+        } while (count($rows) === 1000);
         fclose($out);
         exit;
     }
@@ -386,12 +430,34 @@ final class Senoobar_Link_Auditor {
              FROM {$this->links_table} WHERE scan_id = %d",
             $scan_id
         ));
+        $duplicates = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM (
+                SELECT source_post_id, url, anchor_text FROM {$this->links_table}
+                WHERE scan_id = %d GROUP BY source_post_id, url, anchor_text HAVING COUNT(*) > 1
+            ) AS duplicate_groups",
+            $scan_id
+        ));
+        $without_internal = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM {$this->sources_table} WHERE scan_id = %d AND internal_count = 0",
+            $scan_id
+        ));
         return [
             'total' => (int) ($row->total ?? 0),
             'internal' => (int) ($row->internal_count ?? 0),
             'external' => (int) ($row->external_count ?? 0),
             'empty' => (int) ($row->empty_count ?? 0),
+            'duplicates' => $duplicates,
+            'without_internal' => $without_internal,
         ];
+    }
+
+    private function get_sources_without_internal(int $scan_id): array {
+        global $wpdb;
+        return $wpdb->get_results($wpdb->prepare(
+            "SELECT source_post_id, source_title, source_type, link_count FROM {$this->sources_table}
+             WHERE scan_id = %d AND internal_count = 0 ORDER BY source_post_id ASC LIMIT 100",
+            $scan_id
+        )) ?: [];
     }
 
     private function count_links(int $scan_id, string $type, string $source_type, string $search): int {
