@@ -12,6 +12,12 @@ sla_safety_assert(str_contains($main, "register_rest_route('sla/v1', '/report'")
 sla_safety_assert(str_contains($main, "register_rest_route('sla/v1', '/scans'"), 'explicit scan REST route is registered');
 sla_safety_assert(str_contains($main, "'permission_callback' => [\$this, 'rest_admin_permission']"), 'REST routes require administrator permission');
 sla_safety_assert(str_contains($main, "return current_user_can('manage_options');"), 'REST permission callback checks manage_options');
+sla_safety_assert(str_contains($main, "wp_abilities_api_categories_init"), 'custom Abilities API category is registered before abilities');
+sla_safety_assert(str_contains($main, "'category' => 'senoobar-link-auditor'"), 'abilities use the plugin-owned category');
+sla_safety_assert(substr_count($main, "'show_in_rest' => true") === 2, 'both abilities are exposed through the Abilities REST API');
+sla_safety_assert(substr_count($main, "'mcp' => ['public' => true]") === 2, 'both abilities are discoverable as MCP tools');
+sla_safety_assert(substr_count($main, "'public' => false") === 2, 'abilities do not opt into broad public exposure');
+sla_safety_assert(str_contains($main, "'readonly' => true") && str_contains($main, "'readonly' => false"), 'ability annotations distinguish report reads from scan actions');
 sla_safety_assert(str_contains($main, "add_action('wp_ajax_sla_start_scan'"), 'scan start is authenticated admin AJAX only');
 sla_safety_assert(!str_contains($main, "add_action('wp_ajax_nopriv_"), 'no unauthenticated scan endpoint exists');
 sla_safety_assert(str_contains($main, "current_user_can('manage_options')"), 'administrative capability is enforced');
