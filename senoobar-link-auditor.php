@@ -253,6 +253,11 @@ final class Senoobar_Link_Auditor {
                 <h2>تاریخچه و مقایسهٔ اسکن‌ها</h2>
                 <?php if ($diff['previous']): ?>
                     <p>مقایسهٔ آخرین اسکن موفق با اسکن قبلی: <strong><?php echo esc_html((string) $diff['added']); ?></strong> لینک/مورد جدید، <strong><?php echo esc_html((string) $diff['removed']); ?></strong> لینک/مورد حذف‌شده یا رفع‌شده.</p>
+                    <?php if ($diff['http_comparable']): ?>
+                        <p>مقایسهٔ مشکلات HTTP (پس از بررسی دستی هر دو اسکن): <strong><?php echo esc_html((string) $diff['new_problems']); ?></strong> مشکل جدید، <strong><?php echo esc_html((string) $diff['resolved_problems']); ?></strong> مشکل رفع‌شده.</p>
+                    <?php else: ?>
+                        <p class="description">برای مقایسهٔ مشکلات HTTP، لینک‌های هر دو اسکن باید با دکمهٔ بررسی دستی بررسی شده باشند؛ فعلاً فقط تغییرات فهرست لینک‌ها مقایسه می‌شود.</p>
+                    <?php endif; ?>
                     <table class="widefat striped" id="sla-scan-diff"><thead><tr><th>تغییر</th><th>مبدأ</th><th>آدرس مقصد</th><th>متن لنگر</th></tr></thead><tbody>
                     <?php foreach ($diff['samples'] as $change): ?><tr><td><?php echo esc_html($change['change']); ?></td><td><?php echo esc_html($change['source_title']); ?></td><td class="sla-url"><code><?php echo esc_html($change['url']); ?></code></td><td><?php echo esc_html($change['anchor']); ?></td></tr><?php endforeach; ?>
                     <?php if (!$diff['samples']): ?><tr><td colspan="4">بین دو اسکن تغییر لینک قابل گزارش پیدا نشد.</td></tr><?php endif; ?>
@@ -705,7 +710,7 @@ final class Senoobar_Link_Auditor {
             "SELECT id FROM {$this->scans_table} WHERE status = %s AND id <> %d ORDER BY completed_at DESC, id DESC LIMIT 1",
             'complete', $current_id
         ));
-        if (!$previous) return ['previous' => 0, 'added' => 0, 'removed' => 0, 'samples' => []];
+        if (!$previous) return ['previous' => 0, 'added' => 0, 'removed' => 0, 'new_problems' => 0, 'resolved_problems' => 0, 'http_comparable' => false, 'samples' => []];
         $previous = (int) $previous;
         $added = (int) $wpdb->get_var($wpdb->prepare(
             "SELECT COUNT(*) FROM {$this->links_table} n WHERE n.scan_id = %d AND NOT EXISTS (
@@ -717,6 +722,33 @@ final class Senoobar_Link_Auditor {
                 SELECT 1 FROM {$this->links_table} n WHERE n.scan_id = %d AND n.source_post_id = o.source_post_id AND n.url = o.url AND n.anchor_text = o.anchor_text AND n.link_type = o.link_type AND n.occurrence_no = o.occurrence_no
             )", $previous, $current_id
         ));
+        $problem_statuses = "'broken','redirect_chain','redirect_loop'";
+        $comparable_current = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM {$this->links_table} WHERE scan_id = %d AND check_status <> %s", $current_id, 'unchecked'
+        ));
+        $comparable_previous = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM {$this->links_table} WHERE scan_id = %d AND check_status <> %s", $previous, 'unchecked'
+        ));
+        $new_problems = 0;
+        $resolved_problems = 0;
+        if ($comparable_current > 0 && $comparable_previous > 0) {
+            $new_problems = (int) $wpdb->get_var($wpdb->prepare(
+                "SELECT COUNT(*) FROM {$this->links_table} n
+                 INNER JOIN {$this->links_table} o ON o.scan_id = %d AND o.source_post_id = n.source_post_id
+                    AND o.url = n.url AND o.anchor_text = n.anchor_text AND o.link_type = n.link_type AND o.occurrence_no = n.occurrence_no
+                 WHERE n.scan_id = %d AND n.check_status IN ('broken','redirect_chain','redirect_loop')
+                   AND o.check_status NOT IN ('broken','redirect_chain','redirect_loop','unchecked')",
+                $previous, $current_id
+            ));
+            $resolved_problems = (int) $wpdb->get_var($wpdb->prepare(
+                "SELECT COUNT(*) FROM {$this->links_table} o
+                 INNER JOIN {$this->links_table} n ON n.scan_id = %d AND n.source_post_id = o.source_post_id
+                    AND n.url = o.url AND n.anchor_text = o.anchor_text AND n.link_type = o.link_type AND n.occurrence_no = o.occurrence_no
+                 WHERE o.scan_id = %d AND o.check_status IN ('broken','redirect_chain','redirect_loop')
+                   AND n.check_status = %s",
+                $current_id, $previous, 'ok'
+            ));
+        }
         $new_rows = $wpdb->get_results($wpdb->prepare(
             "SELECT n.source_title, n.url, n.anchor_text FROM {$this->links_table} n WHERE n.scan_id = %d AND NOT EXISTS (
                 SELECT 1 FROM {$this->links_table} o WHERE o.scan_id = %d AND o.source_post_id = n.source_post_id AND o.url = n.url AND o.anchor_text = n.anchor_text AND o.link_type = n.link_type AND o.occurrence_no = n.occurrence_no
@@ -730,7 +762,7 @@ final class Senoobar_Link_Auditor {
         $samples = [];
         foreach ($new_rows as $row) $samples[] = ['change' => 'جدید در اسکن فعلی', 'source_title' => (string) $row->source_title, 'url' => (string) $row->url, 'anchor' => (string) $row->anchor_text];
         foreach ($old_rows as $row) $samples[] = ['change' => 'حذف‌شده/رفع‌شده نسبت به اسکن قبلی', 'source_title' => (string) $row->source_title, 'url' => (string) $row->url, 'anchor' => (string) $row->anchor_text];
-        return ['previous' => $previous, 'added' => $added, 'removed' => $removed, 'samples' => $samples];
+        return ['previous' => $previous, 'added' => $added, 'removed' => $removed, 'new_problems' => $new_problems, 'resolved_problems' => $resolved_problems, 'http_comparable' => ($comparable_current > 0 && $comparable_previous > 0), 'samples' => $samples];
     }
 
     private function get_sources_without_internal(int $scan_id): array {
