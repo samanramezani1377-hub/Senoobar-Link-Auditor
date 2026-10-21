@@ -1,0 +1,9 @@
+.git/
+.github/
+docs/
+tests/
+scripts/
+composer.json
+phpunit.xml.dist
+README.md
+.distignore
