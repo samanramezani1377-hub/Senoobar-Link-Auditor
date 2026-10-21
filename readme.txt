@@ -1,6 +1,6 @@
 === Senoobar Link Auditor ===
 Contributors: senoobar
-Tags: links, seo, reports, woocommerce, broken-links
+Tags: links, seo, reports, woocommerce, broken-links, redirects
 Requires at least: 6.2
 Requires PHP: 8.0
 Stable tag: 0.3.0
@@ -33,6 +33,12 @@ The manual checker uses small batches, a two-second per-request timeout, and fol
 The plugin does not enqueue frontend assets or run scans on frontend requests. Scans and destination checks are user-triggered in the admin screen only.
 
 == Changelog ==
+
+= 0.4.0 =
+* Store initial and final HTTP response codes and final URLs.
+* Show redirect chains and distinguish confirmed loops from hop-limit cases.
+* Allow filtered CSV export of retained historical scans.
+* Compare HTTP problems only when both snapshots have completed checks.
 
 = 0.3.0 =
 * Add bounded manual redirect-chain and loop detection.
