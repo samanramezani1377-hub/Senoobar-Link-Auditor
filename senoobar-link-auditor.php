@@ -478,8 +478,11 @@ final class Senoobar_Link_Auditor {
             $scan_id
         ));
         $without_internal = (int) $wpdb->get_var($wpdb->prepare(
-            "SELECT COUNT(*) FROM {$this->sources_table} WHERE scan_id = %d AND internal_count = 0",
-            $scan_id
+            "SELECT COUNT(*) FROM {$this->sources_table} s
+             LEFT JOIN (SELECT DISTINCT scan_id, target_post_id FROM {$this->links_table} WHERE scan_id = %d AND target_post_id > 0) t
+             ON t.scan_id = s.scan_id AND t.target_post_id = s.source_post_id
+             WHERE s.scan_id = %d AND t.target_post_id IS NULL",
+            $scan_id, $scan_id
         ));
         return [
             'total' => (int) ($row->total ?? 0),
