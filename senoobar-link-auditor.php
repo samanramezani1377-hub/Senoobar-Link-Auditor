@@ -267,8 +267,8 @@ final class Senoobar_Link_Auditor {
                     <?php if (!$diff['samples']): ?><tr><td colspan="4">بین دو اسکن تغییر لینک قابل گزارش پیدا نشد.</td></tr><?php endif; ?>
                     </tbody></table>
                 <?php else: ?><p>برای مقایسه، حداقل دو اسکن موفق لازم است.</p><?php endif; ?>
-                <table class="widefat striped" id="sla-scan-history"><thead><tr><th>شناسه</th><th>شروع</th><th>پایان</th><th>محتوای بررسی‌شده</th><th>تعداد لینک‌ها</th><th>وضعیت</th></tr></thead><tbody>
-                <?php foreach ($history as $past): ?><tr><td><?php echo esc_html((string) $past->id); ?></td><td><?php echo esc_html((string) $past->started_at); ?></td><td><?php echo esc_html((string) ($past->completed_at ?: '—')); ?></td><td><?php echo esc_html((string) $past->processed_posts); ?></td><td><?php echo esc_html((string) $past->link_count); ?></td><td><?php echo (int) $past->id === (int) $current->id ? 'اسکن فعلی' : 'اسکن قبلی'; ?></td></tr><?php endforeach; ?>
+                <table class="widefat striped" id="sla-scan-history"><thead><tr><th>شناسه</th><th>شروع</th><th>پایان</th><th>محتوای بررسی‌شده</th><th>تعداد لینک‌ها</th><th>وضعیت</th><th>CSV</th></tr></thead><tbody>
+                <?php foreach ($history as $past): ?><tr><td><?php echo esc_html((string) $past->id); ?></td><td><?php echo esc_html((string) $past->started_at); ?></td><td><?php echo esc_html((string) ($past->completed_at ?: '—')); ?></td><td><?php echo esc_html((string) $past->processed_posts); ?></td><td><?php echo esc_html((string) $past->link_count); ?></td><td><?php echo (int) $past->id === (int) $current->id ? 'اسکن فعلی' : 'اسکن قبلی'; ?></td><td><a href="<?php echo esc_url(wp_nonce_url(admin_url('admin-post.php?action=sla_export_csv&scan_id=' . (int) $past->id), 'sla_export_csv')); ?>">دانلود</a></td></tr><?php endforeach; ?>
                 </tbody></table>
                 <h2>صفحات بدون لینک ورودی (حداکثر 100 مورد) <button type="button" class="button sla-copy-report" data-copy="sla-no-incoming">کپی این گزارش</button></h2>
                 <table class="widefat striped" id="sla-no-incoming"><thead><tr><th>عنوان محتوا</th><th>نوع</th><th>تعداد لینک خروجی</th></tr></thead><tbody>
@@ -466,9 +466,10 @@ final class Senoobar_Link_Auditor {
         }
         check_admin_referer('sla_export_csv');
         $scan_id = absint($_GET['scan_id'] ?? 0);
-        $scan = $this->current_scan();
-        if (!$scan || (int) $scan->id !== $scan_id) {
-            wp_die(esc_html__('گزارش انتخاب‌شده دیگر در دسترس نیست.', 'senoobar-link-auditor'), '', ['response' => 404]);
+        global $wpdb;
+        $scan = $wpdb->get_row($wpdb->prepare("SELECT id FROM {$this->scans_table} WHERE id = %d AND status = %s", $scan_id, 'complete'));
+        if (!$scan) {
+            wp_die(esc_html__('گزارش انتخاب‌شده دیگر در دسترس نیست یا از تاریخچه حذف شده است.', 'senoobar-link-auditor'), '', ['response' => 404]);
         }
         $type = sanitize_key($_GET['link_type'] ?? 'all');
         $source_type = sanitize_key($_GET['source_type'] ?? 'all');
@@ -476,10 +477,10 @@ final class Senoobar_Link_Auditor {
         $search = sanitize_text_field(wp_unslash($_GET['s'] ?? ''));
         nocache_headers();
         header('Content-Type: text/csv; charset=UTF-8');
-        header('Content-Disposition: attachment; filename="senoobar-link-auditor.csv"');
+        header('Content-Disposition: attachment; filename="senoobar-link-auditor-scan-' . $scan_id . '.csv"');
         $out = fopen('php://output', 'w');
         fwrite($out, "\xEF\xBB\xBF");
-        fputcsv($out, ['Source ID', 'Source title', 'Source type', 'Anchor text', 'Destination URL', 'Link type', 'HTTP status category', 'HTTP code', 'Check details'], ',', '"', '');
+        fputcsv($out, ['Source ID', 'Source title', 'Source type', 'Anchor text', 'Destination URL', 'Link type', 'HTTP status category', 'Initial HTTP code', 'Final HTTP code', 'Check details', 'Final URL', 'Redirect chain'], ',', '"', '');
         $page = 1;
         do {
             $rows = $this->get_links($scan_id, $page, $type, $source_type, $search, 1000, $check_status);
@@ -493,7 +494,10 @@ final class Senoobar_Link_Auditor {
                     $row->link_type,
                     (string) $row->check_status,
                     (int) $row->check_code,
+                    (int) $row->final_code,
                     $this->csv_safe((string) $row->check_message),
+                    $this->csv_safe((string) $row->final_url),
+                    $this->csv_safe((string) $row->redirect_chain),
                 ], ',', '"', '');
             }
             $page++;
