@@ -35,6 +35,7 @@ final class Senoobar_Link_Auditor {
         register_activation_hook(SLA_FILE, [$this, 'activate']);
         add_action('admin_menu', [$this, 'admin_menu']);
         add_action('rest_api_init', [$this, 'register_rest_routes']);
+        add_action('wp_abilities_api_init', [$this, 'register_agent_abilities']);
         add_action('admin_enqueue_scripts', [$this, 'enqueue_admin_assets']);
         add_action('wp_ajax_sla_start_scan', [$this, 'ajax_start_scan']);
         add_action('wp_ajax_sla_scan_batch', [$this, 'ajax_scan_batch']);
@@ -135,6 +136,100 @@ final class Senoobar_Link_Auditor {
             'permission_callback' => [$this, 'rest_admin_permission'],
             'args' => ['id' => ['required' => true, 'sanitize_callback' => 'absint']],
         ]);
+    }
+
+    /**
+     * Register native WordPress Abilities API tools when that API is available.
+     * This lets connected WordPress agents discover and invoke the scanner directly.
+     */
+    public function register_agent_abilities(): void {
+        if (!function_exists('wp_register_ability')) {
+            return;
+        }
+
+        wp_register_ability('senoobar-link-auditor/get-report', [
+            'label' => 'دریافت گزارش لینک‌های صنوبر',
+            'description' => 'خواندن گزارش آخرین اسکن موفق لینک‌های داخلی و خارجی، شامل آمار، لنگرهای خالی و محتواهای بدون لینک داخلی. فقط خواندنی است.',
+            'category' => 'content',
+            'input_schema' => [
+                'type' => 'object',
+                'properties' => [
+                    'page' => ['type' => 'integer', 'minimum' => 1, 'default' => 1],
+                    'per_page' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 100, 'default' => 50],
+                    'link_type' => ['type' => 'string', 'enum' => ['all', 'internal', 'external'], 'default' => 'all'],
+                    'source_type' => ['type' => 'string', 'enum' => ['all', 'post', 'page', 'product'], 'default' => 'all'],
+                    'search' => ['type' => 'string', 'default' => ''],
+                ],
+                'additionalProperties' => false,
+            ],
+            'output_schema' => ['type' => 'object', 'properties' => ['available' => ['type' => 'boolean'], 'links' => ['type' => 'array']], 'additionalProperties' => true],
+            'execute_callback' => [$this, 'ability_get_report'],
+            'permission_callback' => [$this, 'rest_admin_permission'],
+        ]);
+
+        wp_register_ability('senoobar-link-auditor/scan-links', [
+            'label' => 'اسکن دستی لینک‌های صنوبر',
+            'description' => 'به‌صورت صریح اسکن را شروع می‌کند یا یک دسته از اسکن فعال را ادامه می‌دهد. برای شروع action=start و برای ادامه action=continue همراه scan_id را بفرستید. هیچ محتوایی تغییر نمی‌کند.',
+            'category' => 'content',
+            'input_schema' => [
+                'type' => 'object',
+                'properties' => [
+                    'action' => ['type' => 'string', 'enum' => ['start', 'continue', 'status'], 'default' => 'status'],
+                    'scan_id' => ['type' => 'integer', 'minimum' => 1],
+                ],
+                'required' => ['action'],
+                'additionalProperties' => false,
+            ],
+            'output_schema' => ['type' => 'object', 'additionalProperties' => true],
+            'execute_callback' => [$this, 'ability_scan_links'],
+            'permission_callback' => [$this, 'rest_admin_permission'],
+        ]);
+    }
+
+    public function ability_get_report(array $input = []): array|WP_Error {
+        $request = new WP_REST_Request('GET', '/sla/v1/report');
+        foreach (['page', 'per_page', 'link_type', 'source_type', 'search'] as $key) {
+            if (array_key_exists($key, $input)) {
+                $request->set_param($key, $input[$key]);
+            }
+        }
+        $response = $this->rest_report($request);
+        return $this->ability_response_data($response);
+    }
+
+    public function ability_scan_links(array $input = []): array|WP_Error {
+        $action = sanitize_key((string) ($input['action'] ?? 'status'));
+        if ($action === 'start') {
+            $response = $this->rest_start_scan(new WP_REST_Request('POST', '/sla/v1/scans'));
+        } elseif ($action === 'continue') {
+            $scan_id = absint($input['scan_id'] ?? 0);
+            if ($scan_id < 1) {
+                return new WP_Error('sla_missing_scan_id', 'برای ادامهٔ اسکن، scan_id الزامی است.', ['status' => 400]);
+            }
+            $request = new WP_REST_Request('POST', '/sla/v1/scans/' . $scan_id . '/continue');
+            $request->set_param('id', $scan_id);
+            $response = $this->rest_continue_scan($request);
+        } else {
+            $scan_id = absint($input['scan_id'] ?? 0);
+            if ($scan_id > 0) {
+                $request = new WP_REST_Request('GET', '/sla/v1/scans/' . $scan_id);
+                $request->set_param('id', $scan_id);
+                $response = $this->rest_scan_status($request);
+            } else {
+                $response = $this->rest_status(new WP_REST_Request('GET', '/sla/v1/status'));
+            }
+        }
+        return $this->ability_response_data($response);
+    }
+
+    private function ability_response_data(WP_REST_Response $response): array|WP_Error {
+        $data = $response->get_data();
+        if ($response->get_status() >= 400) {
+            $code = is_array($data) && isset($data['code']) ? sanitize_key((string) $data['code']) : 'sla_agent_request_failed';
+            $message = is_array($data) && isset($data['message']) ? (string) $data['message'] : 'درخواست انجام نشد.';
+            return new WP_Error($code, $message, ['status' => $response->get_status()]);
+        }
+        return is_array($data) ? $data : ['result' => $data];
     }
 
     public function rest_admin_permission(): bool {
