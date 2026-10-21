@@ -382,7 +382,7 @@ final class Senoobar_Link_Auditor {
         header('Content-Disposition: attachment; filename="senoobar-link-auditor.csv"');
         $out = fopen('php://output', 'w');
         fwrite($out, "\xEF\xBB\xBF");
-        fputcsv($out, ['Source ID', 'Source title', 'Source type', 'Anchor text', 'Destination URL', 'Link type']);
+        fputcsv($out, ['Source ID', 'Source title', 'Source type', 'Anchor text', 'Destination URL', 'Link type'], ',', '"', '');
         $page = 1;
         do {
             $rows = $this->get_links($scan_id, $page, $type, $source_type, $search, 1000);
@@ -394,7 +394,7 @@ final class Senoobar_Link_Auditor {
                 $this->csv_safe((string) $row->anchor_text),
                 $this->csv_safe((string) $row->url),
                     $row->link_type,
-                ]);
+                ], ',', '"', '');
             }
             $page++;
         } while (count($rows) === 1000);
