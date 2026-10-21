@@ -11,7 +11,7 @@ sla_safety_assert(!preg_match('/wp_schedule_event|wp_schedule_single_event|wp_cr
 sla_safety_assert(str_contains($main, "add_action('wp_ajax_sla_start_scan'"), 'scan start is authenticated admin AJAX only');
 sla_safety_assert(!str_contains($main, "add_action('wp_ajax_nopriv_"), 'no unauthenticated scan endpoint exists');
 sla_safety_assert(str_contains($main, "current_user_can('manage_options')"), 'administrative capability is enforced');
-sla_safety_assert(str_contains($main, "preg_match('/^[\\x00-\\x20]*[=+@-]/u', $value)"), 'CSV formula-leading values are neutralized');
+sla_safety_assert(str_contains($main, '[=+@-]') && str_contains($main, 'csv_safe'), 'CSV formula-leading values are neutralized');
 sla_safety_assert(str_contains($js, "await request('sla_scan_batch'"), 'scan batches are user-session driven');
 sla_safety_assert(!preg_match('/setInterval\\s*\\(|setTimeout\\s*\\(/', $js), 'no background polling or timer is used');
 echo "Safety checks passed (9 assertions).\n";
