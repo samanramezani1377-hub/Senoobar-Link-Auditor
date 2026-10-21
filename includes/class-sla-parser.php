@@ -8,7 +8,7 @@ final class SLA_Parser {
     /**
      * @return array<int, array{url:string,anchor:string,type:string}>
      */
-    public static function extract_links(string $html, string $home_url): array {
+    public static function extract_links(string $html, string $home_url, ?string $source_url = null): array {
         if (trim($html) === '') {
             return [];
         }
@@ -35,10 +35,10 @@ final class SLA_Parser {
             }
 
             $raw_url = trim(html_entity_decode($node->getAttribute('href'), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
-            $url = self::resolve_url($raw_url, $home_url, $home_scheme);
+            $url = self::resolve_url($raw_url, $home_url, $home_scheme, $source_url);
             $target = wp_parse_url($url);
             $target_host = isset($target['host']) ? strtolower(rtrim((string) $target['host'], '.')) : '';
-            $type = ($target_host !== '' && $home_host !== '' && hash_equals($home_host, $target_host)) ? 'internal' : 'external';
+            $type = ($raw_url === '' || ($target_host !== '' && $home_host !== '' && hash_equals($home_host, $target_host))) ? 'internal' : 'external';
 
             $anchor = trim(preg_replace('/\\s+/u', ' ', (string) $node->textContent) ?? '');
             $result[] = [
@@ -52,7 +52,7 @@ final class SLA_Parser {
         return $result;
     }
 
-    private static function resolve_url(string $url, string $home_url, string $home_scheme): string {
+    private static function resolve_url(string $url, string $home_url, string $home_scheme, ?string $source_url = null): string {
         if ($url === '') {
             return '';
         }
@@ -64,27 +64,52 @@ final class SLA_Parser {
             return esc_url_raw($url, ['http', 'https']);
         }
 
-        // Do not classify javascript:, data:, mailto:, tel:, or other schemes as site links.
+        // Preserve useful contact protocols for reporting, but strip executable or data schemes.
         if (preg_match('/^[a-z][a-z0-9+.-]*:/i', $url)) {
-            return esc_url_raw($url, ['http', 'https']);
+            return esc_url_raw($url, ['http', 'https', 'mailto', 'tel', 'sms', 'ftp']);
         }
 
         $home = wp_parse_url($home_url);
-        $scheme = $home_scheme ?: 'https';
-        $host = isset($home['host']) ? (string) $home['host'] : '';
-        $port = isset($home['port']) ? ':' . (int) $home['port'] : '';
+        $base_url = $source_url ?: $home_url;
+        $base_parts = wp_parse_url($base_url);
+        $scheme = isset($base_parts['scheme']) ? (string) $base_parts['scheme'] : ($home_scheme ?: 'https');
+        $host = isset($base_parts['host']) ? (string) $base_parts['host'] : (isset($home['host']) ? (string) $home['host'] : '');
+        $port = isset($base_parts['port']) ? ':' . (int) $base_parts['port'] : (isset($home['port']) ? ':' . (int) $home['port'] : '');
         $base = $scheme . '://' . $host . $port;
-        $path = isset($home['path']) ? rtrim((string) $home['path'], '/') : '';
+        $base_path = isset($base_parts['path']) ? (string) $base_parts['path'] : '/';
 
         if (str_starts_with($url, '#') || str_starts_with($url, '?')) {
-            $current_path = isset($home['path']) ? (string) $home['path'] : '/';
-            return $base . ($current_path ?: '/') . $url;
+            return $base . ($base_path ?: '/') . $url;
         }
 
         if (str_starts_with($url, '/')) {
-            return $base . $url;
+            $path = $url;
+        } else {
+            $directory = substr($base_path, 0, (int) strrpos($base_path, '/') + 1);
+            $path = ($directory ?: '/') . $url;
         }
 
-        return $base . ($path !== '' ? $path : '') . '/' . ltrim($url, '/');
+        $parts = explode('/', $path);
+        $normalized = [];
+        foreach ($parts as $part) {
+            if ($part === '' || $part === '.') {
+                if (!$normalized && $part === '') {
+                    $normalized[] = '';
+                }
+                continue;
+            }
+            if ($part === '..') {
+                if (count($normalized) > 1) {
+                    array_pop($normalized);
+                }
+                continue;
+            }
+            $normalized[] = $part;
+        }
+        $resolved_path = implode('/', $normalized);
+        if (!str_starts_with($resolved_path, '/')) {
+            $resolved_path = '/' . $resolved_path;
+        }
+        return $base . $resolved_path;
     }
 }
