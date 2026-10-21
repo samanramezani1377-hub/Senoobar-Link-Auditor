@@ -1,9 +1,9 @@
 === Senoobar Link Auditor ===
 Contributors: senoobar
-Tags: links, seo, reports, woocommerce, broken-links, redirects, redirects
+Tags: links, seo, reports, woocommerce, broken-links, redirects
 Requires at least: 6.2
 Requires PHP: 8.0
-Stable tag: 0.3.0
+Stable tag: 0.4.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
