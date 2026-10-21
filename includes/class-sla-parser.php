@@ -43,7 +43,7 @@ final class SLA_Parser {
             $anchor = trim(preg_replace('/\\s+/u', ' ', (string) $node->textContent) ?? '');
             $result[] = [
                 'url' => $url,
-                'anchor' => mb_substr($anchor, 0, 2000, 'UTF-8'),
+                'anchor' => function_exists('mb_substr') ? mb_substr($anchor, 0, 2000, 'UTF-8') : substr($anchor, 0, 2000),
                 'type' => $type,
             ];
         }
