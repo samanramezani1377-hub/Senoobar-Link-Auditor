@@ -7,7 +7,8 @@ A standalone, admin-only WordPress plugin for practical internal-link analysis.
 - Inventory internal and external links found in saved content for published posts, pages, and WooCommerce products.
 - Count internal inbound links per destination page and list source pages linking to it.
 - List pages with zero inbound internal links, so orphaned content can be found.
-- Manually check HTTP/HTTPS link destinations in small batches; broken HTTP responses are separated from connection errors or unknown results.
+- Manually check HTTP/HTTPS destinations in bounded batches; classify 404/410 and other HTTP errors, report redirect chains and loops, and distinguish hop-limit cases from confirmed loops.
+- Retain the ten most recent successful scans, compare link changes and checked HTTP issues, and export current or historical snapshots to CSV with initial/final HTTP details.
 - Copy each report table independently with its own button, including broken links, pages with no inbound links, and inbound-link counts.
 - Search, link-type/content-type/HTTP-status filters, pagination, summary counts, and CSV export including HTTP status and check details.
 - Manually traces up to three redirect hops per URL, recording 301/302-style redirects, chains, loops/overlong chains, 404/410 and other HTTP errors.
