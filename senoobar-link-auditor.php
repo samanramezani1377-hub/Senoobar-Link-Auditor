@@ -153,7 +153,7 @@ final class Senoobar_Link_Auditor {
         }
 
         $current = $this->current_scan();
-        $counts = $current ? $this->report_counts((int) $current->id) : ['total' => 0, 'internal' => 0, 'external' => 0, 'empty' => 0, 'duplicates' => 0, 'without_internal' => 0, 'broken' => 0];
+        $counts = $current ? $this->report_counts((int) $current->id) : ['total' => 0, 'internal' => 0, 'external' => 0, 'empty' => 0, 'duplicates' => 0, 'without_internal' => 0, 'redirects' => 0, 'broken' => 0];
         $page = max(1, absint($_GET['paged'] ?? 1));
         $type = sanitize_key($_GET['link_type'] ?? 'all');
         $source_type = sanitize_key($_GET['source_type'] ?? 'all');
@@ -181,6 +181,7 @@ final class Senoobar_Link_Auditor {
                 <div><strong><?php echo esc_html((string) $counts['empty']); ?></strong><span>لنگر خالی</span></div>
                 <div><strong><?php echo esc_html((string) $counts['duplicates']); ?></strong><span>گروه لینک تکراری</span></div>
                 <div><strong><?php echo esc_html((string) $counts['without_internal']); ?></strong><span>صفحات بدون لینک ورودی</span></div>
+                <div><strong><?php echo esc_html((string) $counts['redirects']); ?></strong><span>ریدایرکت/زنجیره</span></div>
                 <div><strong><?php echo esc_html((string) $counts['broken']); ?></strong><span>لینک شکسته</span></div>
             </div>
 
