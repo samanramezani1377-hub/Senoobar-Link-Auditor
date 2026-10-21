@@ -214,7 +214,8 @@ final class Senoobar_Link_Auditor {
                             <option value="ok" <?php selected($check_status, 'ok'); ?>>سالم</option>
                             <option value="redirect" <?php selected($check_status, 'redirect'); ?>>ریدایرکت</option>
                             <option value="redirect_chain" <?php selected($check_status, 'redirect_chain'); ?>>زنجیرهٔ ریدایرکت</option>
-                            <option value="redirect_loop" <?php selected($check_status, 'redirect_loop'); ?>>حلقه/زنجیرهٔ بیش‌ازحد</option>
+                            <option value="redirect_loop" <?php selected($check_status, 'redirect_loop'); ?>>حلقهٔ ریدایرکت</option>
+                            <option value="redirect_limit" <?php selected($check_status, 'redirect_limit'); ?>>بیش از سقف ریدایرکت</option>
                             <option value="broken" <?php selected($check_status, 'broken'); ?>>خطای HTTP</option>
                             <option value="unknown" <?php selected($check_status, 'unknown'); ?>>نامشخص</option>
                         </select>
@@ -289,6 +290,12 @@ final class Senoobar_Link_Auditor {
                 <table class="widefat striped" id="sla-broken-links"><thead><tr><th>صفحه مبدأ</th><th>آدرس مقصد</th><th>نتیجه</th><th>HTTP</th></tr></thead><tbody>
                 <?php $broken = $this->get_checked_links((int) $current->id, ['broken']); foreach ($broken as $item): ?><tr><td><?php echo esc_html($item->source_title); ?></td><td class="sla-url"><code><?php echo esc_html($item->url); ?></code></td><td><?php echo esc_html($item->check_message); ?></td><td><?php echo esc_html((string) $item->check_code); ?></td></tr><?php endforeach; ?>
                 <?php if (!$broken): ?><tr><td colspan="4">هنوز لینک شکستهٔ تأییدشده‌ای ثبت نشده است.</td></tr><?php endif; ?>
+                </tbody></table>
+                <h2>ریدایرکت‌ها و زنجیره‌ها <button type="button" class="button sla-copy-report" data-copy="sla-redirect-links">کپی این گزارش</button></h2>
+                <p class="description">کد اولیه و کد نهایی جدا هستند؛ زنجیرهٔ کامل در ستون آخر ثبت می‌شود. رسیدن به سقف ریدایرکت به‌معنای اثبات حلقه نیست.</p>
+                <table class="widefat striped" id="sla-redirect-links"><thead><tr><th>صفحه مبدأ</th><th>آدرس اولیه</th><th>کد اولیه</th><th>کد نهایی</th><th>مقصد نهایی</th><th>زنجیره</th></tr></thead><tbody>
+                <?php $redirects = $this->get_checked_links((int) $current->id, ['redirect', 'redirect_chain', 'redirect_loop', 'redirect_limit']); foreach ($redirects as $item): ?><tr><td><?php echo esc_html($item->source_title); ?></td><td><code><?php echo esc_html($item->url); ?></code></td><td><?php echo esc_html((string) $item->check_code); ?></td><td><?php echo esc_html((string) $item->final_code); ?></td><td><code><?php echo esc_html((string) $item->final_url); ?></code></td><td><?php echo esc_html((string) $item->redirect_chain); ?></td></tr><?php endforeach; ?>
+                <?php if (!$redirects): ?><tr><td colspan="6">ریدایرکتی ثبت نشده است؛ ابتدا بررسی دستی لینک‌ها را اجرا کنید.</td></tr><?php endif; ?>
                 </tbody></table>
             <?php endif; ?>
             <p class="description">فهرست لینک‌ها از محتوای ذخیره‌شده ساخته می‌شود؛ لینک‌های تکراری جداگانه حفظ می‌شوند.</p>
@@ -574,10 +581,10 @@ final class Senoobar_Link_Auditor {
 
     private function get_checked_links(int $scan_id, array $statuses): array {
         global $wpdb;
-        $statuses = array_values(array_filter($statuses, static fn($status) => in_array($status, ['broken', 'ok', 'unknown', 'redirect', 'redirect_chain', 'redirect_loop'], true)));
+        $statuses = array_values(array_filter($statuses, static fn($status) => in_array($status, ['broken', 'ok', 'unknown', 'redirect', 'redirect_chain', 'redirect_loop', 'redirect_limit'], true)));
         if (!$statuses) return [];
         $holders = implode(',', array_fill(0, count($statuses), '%s'));
-        return $wpdb->get_results($wpdb->prepare("SELECT source_post_id, source_title, url, check_status, check_code, check_message, redirect_chain FROM {$this->links_table} WHERE scan_id = %d AND check_status IN ({$holders}) ORDER BY check_status, source_post_id LIMIT 500", ...array_merge([$scan_id], $statuses))) ?: [];
+        return $wpdb->get_results($wpdb->prepare("SELECT source_post_id, source_title, url, check_status, check_code, final_code, check_message, final_url, redirect_chain FROM {$this->links_table} WHERE scan_id = %d AND check_status IN ({$holders}) ORDER BY check_status, source_post_id LIMIT 500", ...array_merge([$scan_id], $statuses))) ?: [];
     }
 
     public function ajax_check_broken_batch(): void {
@@ -688,17 +695,21 @@ final class Senoobar_Link_Auditor {
                 if (count($codes) > 1 && $status === 'redirect') $message = 'ریدایرکت (' . implode(' → ', $codes) . ')';
                 if (count($codes) > 2 && $status === 'redirect_chain') $message = 'زنجیرهٔ ریدایرکت (' . implode(' → ', $codes) . ')';
             }
+            $first_code = $codes ? (int) $codes[0] : 0;
+            $final_code = $codes ? (int) $codes[count($codes) - 1] : 0;
             $wpdb->update(
                 $this->links_table,
                 [
                     'check_status' => $status,
-                    'check_code' => $code,
+                    'check_code' => $first_code,
+                    'final_code' => $final_code,
                     'check_message' => substr($message, 0, 250),
+                    'final_url' => ($current_url !== $initial_url || $codes) ? $current_url : '',
                     'redirect_chain' => implode("\n", $chain),
                     'checked_at' => current_time('mysql'),
                 ],
                 ['id' => (int) $row->id],
-                ['%s', '%d', '%s', '%s', '%s'],
+                ['%s', '%d', '%d', '%s', '%s', '%s', '%s'],
                 ['%d']
             );
         }
@@ -802,7 +813,7 @@ final class Senoobar_Link_Auditor {
         $params[] = $limit;
         $params[] = $offset;
         return $wpdb->get_results($wpdb->prepare(
-            "SELECT id, source_post_id, source_title, source_type, url, anchor_text, link_type, check_status, check_code, check_message
+            "SELECT id, source_post_id, source_title, source_type, url, anchor_text, link_type, check_status, check_code, final_code, check_message, final_url, redirect_chain
              FROM {$this->links_table} WHERE {$where}
              ORDER BY source_post_id ASC, occurrence_no ASC LIMIT %d OFFSET %d",
             ...$params
@@ -821,7 +832,7 @@ final class Senoobar_Link_Auditor {
             $where .= ' AND source_type = %s';
             $params[] = $source_type;
         }
-        if (in_array($check_status, ['unchecked', 'ok', 'redirect', 'redirect_chain', 'redirect_loop', 'broken', 'unknown'], true)) {
+        if (in_array($check_status, ['unchecked', 'ok', 'redirect', 'redirect_chain', 'redirect_loop', 'redirect_limit', 'broken', 'unknown'], true)) {
             $where .= ' AND check_status = %s';
             $params[] = $check_status;
         }
