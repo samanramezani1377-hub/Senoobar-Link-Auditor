@@ -19,7 +19,7 @@ sla_safety_assert(str_contains($main, 'target_post_id bigint(20) unsigned'), 'in
 sla_safety_assert(str_contains($main, 'get_pages_without_incoming'), 'pages with no inbound links can be reported');
 sla_safety_assert(str_contains($main, 'get_incoming_report'), 'inbound-link counts and sources are reported');
 sla_safety_assert(str_contains($main, 'wp_safe_remote_head') && str_contains($main, 'wp_safe_remote_get'), 'manual link checks use safe HTTP methods');
-sla_safety_assert(str_contains($main, "'timeout' => 3") && str_contains($main, "'redirection' => 2"), 'destination checks have bounded timeout and redirects');
+sla_safety_assert(str_contains($main, "'timeout' => 2") && str_contains($main, "'redirection' => 0"), 'destination checks have bounded timeout and disable automatic redirect following');
 sla_safety_assert(str_contains($main, "id=\\"sla-broken-links\\"") && str_contains($main, "id=\\"sla-incoming\\""), 'broken and inbound reports have copyable tables');
 sla_safety_assert(str_contains($main, "redirect_chain text NULL"), 'redirect paths are stored in the snapshot');
 sla_safety_assert(str_contains($main, "REDIRECT_HOP_LIMIT = 3") && str_contains($main, "'redirection' => 0"), 'redirect tracing has a strict hop cap and disables automatic following');
@@ -35,4 +35,4 @@ sla_safety_assert(str_contains($js, "await request('sla_check_broken_batch'"), '
 sla_safety_assert(str_contains($js, "navigator.clipboard.writeText"), 'each report supports clipboard copy');
 sla_safety_assert(!preg_match('/setInterval\\s*\\(|setTimeout\\s*\\(/', $js), 'no background polling or timer is used');
 sla_safety_assert(str_contains($readme, 'No agent abilities or custom agent REST endpoints'), 'documentation confirms agent integrations are removed');
-echo "Safety checks passed (24 assertions).\n";
+echo "Safety checks passed.\n";
