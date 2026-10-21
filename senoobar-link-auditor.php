@@ -562,7 +562,7 @@ final class Senoobar_Link_Auditor {
             'empty' => (int) ($row->empty_count ?? 0),
             'duplicates' => $duplicates,
             'without_internal' => $without_internal,
-            'redirects' => (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$this->links_table} WHERE scan_id = %d AND check_status IN (%s,%s,%s)", $scan_id, 'redirect', 'redirect_chain', 'redirect_loop')),
+            'redirects' => (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$this->links_table} WHERE scan_id = %d AND check_status IN (%s,%s,%s,%s)", $scan_id, 'redirect', 'redirect_chain', 'redirect_loop', 'redirect_limit')),
             'broken' => (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$this->links_table} WHERE scan_id = %d AND check_status = %s", $scan_id, 'broken')),
         ];
     }
@@ -775,7 +775,7 @@ final class Senoobar_Link_Auditor {
                 "SELECT COUNT(*) FROM {$this->links_table} o
                  INNER JOIN {$this->links_table} n ON n.scan_id = %d AND n.source_post_id = o.source_post_id
                     AND n.url = o.url AND n.anchor_text = o.anchor_text AND n.link_type = o.link_type AND n.occurrence_no = o.occurrence_no
-                 WHERE o.scan_id = %d AND o.check_status IN ('broken','redirect','redirect_chain','redirect_loop')
+                 WHERE o.scan_id = %d AND o.check_status IN ('broken','redirect','redirect_chain','redirect_loop','redirect_limit')
                    AND n.check_status = %s",
                 $current_id, $previous, 'ok'
             ));
