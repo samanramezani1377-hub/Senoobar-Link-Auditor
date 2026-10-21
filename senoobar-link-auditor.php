@@ -287,9 +287,9 @@ final class Senoobar_Link_Auditor {
                 </tbody></table>
                 <h2>لینک‌های شکسته <button type="button" class="button sla-copy-report" data-copy="sla-broken-links">کپی این گزارش</button></h2>
                 <p class="description">با دکمهٔ بررسی دستی، مقصدها در دسته‌های کوچک بررسی می‌شوند. خطای اتصال به‌تنهایی به‌عنوان لینک شکسته قطعی ثبت نمی‌شود.</p>
-                <table class="widefat striped" id="sla-broken-links"><thead><tr><th>صفحه مبدأ</th><th>آدرس مقصد</th><th>نتیجه</th><th>HTTP</th></tr></thead><tbody>
-                <?php $broken = $this->get_checked_links((int) $current->id, ['broken']); foreach ($broken as $item): ?><tr><td><?php echo esc_html($item->source_title); ?></td><td class="sla-url"><code><?php echo esc_html($item->url); ?></code></td><td><?php echo esc_html($item->check_message); ?></td><td><?php echo esc_html((string) $item->check_code); ?></td></tr><?php endforeach; ?>
-                <?php if (!$broken): ?><tr><td colspan="4">هنوز لینک شکستهٔ تأییدشده‌ای ثبت نشده است.</td></tr><?php endif; ?>
+                <table class="widefat striped" id="sla-broken-links"><thead><tr><th>صفحه مبدأ</th><th>آدرس اولیه</th><th>نتیجه</th><th>HTTP اولیه / نهایی</th><th>مقصد نهایی</th></tr></thead><tbody>
+                <?php $broken = $this->get_checked_links((int) $current->id, ['broken']); foreach ($broken as $item): ?><tr><td><?php echo esc_html($item->source_title); ?></td><td class="sla-url"><code><?php echo esc_html($item->url); ?></code></td><td><?php echo esc_html($item->check_message); ?></td><td><?php echo esc_html((string) $item->check_code . ' / ' . (string) $item->final_code); ?></td><td><code><?php echo esc_html((string) $item->final_url); ?></code></td></tr><?php endforeach; ?>
+                <?php if (!$broken): ?><tr><td colspan="5">هنوز لینک شکستهٔ تأییدشده‌ای ثبت نشده است.</td></tr><?php endif; ?>
                 </tbody></table>
                 <h2>ریدایرکت‌ها و زنجیره‌ها <button type="button" class="button sla-copy-report" data-copy="sla-redirect-links">کپی این گزارش</button></h2>
                 <p class="description">کد اولیه و کد نهایی جدا هستند؛ زنجیرهٔ کامل در ستون آخر ثبت می‌شود. رسیدن به سقف ریدایرکت به‌معنای اثبات حلقه نیست.</p>
